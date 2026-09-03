@@ -1,20 +1,14 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# SaaS-Motos
 
-# Run and deploy your AI Studio app
+Sistema de gestión integral para talleres de motos (Motorpro): clientes, inventario, facturación, citas, garantías, actas, asistencia y analíticas.
 
-This contains everything you need to run your app locally.
+## Requisitos
 
-View your app in AI Studio: https://ai.studio/apps/35fbc089-889f-472f-8b25-7e2f5ff3786e
+- Node.js
 
-## Run Locally
+## Ejecutar localmente
 
-**Prerequisites:**  Node.js
-
-
-1. Install dependencies:
+1. Instalar dependencias:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
+2. Ejecutar la app:
    `npm run dev`
