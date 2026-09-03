@@ -1,0 +1,6 @@
+{
+  "name": "MotoPro Admin - Sistema de Gestión de Taller",
+  "description": "Plataforma integral de gestión de talleres y concesionarios de motocicletas: citas, inventario, actas técnicas, garantías de servicios y productos, facturación y reportes.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
