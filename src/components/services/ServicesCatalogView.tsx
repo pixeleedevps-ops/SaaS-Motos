@@ -16,11 +16,12 @@ import { ServiceItem } from '../../types';
 import { formatCOP } from '../../utils/formatters';
 
 export const ServicesCatalogView: React.FC = () => {
-  const { services, toggleServiceStatus, navigateTo } = useApp();
+  const { services, toggleServiceStatus, createService, navigateTo } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [newService, setNewService] = useState({ name: '', category: 'Mantenimiento', durationMin: 60, price: 120000, description: '' });
 
   const categories = [
     'Todas',
@@ -176,6 +177,8 @@ export const ServicesCatalogView: React.FC = () => {
                 <input
                   type="text"
                   placeholder="ej. Cambio de Kit de Transmisión Reforzada"
+                  value={newService.name}
+                  onChange={(e) => setNewService((s) => ({ ...s, name: e.target.value }))}
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 />
               </div>
@@ -183,7 +186,7 @@ export const ServicesCatalogView: React.FC = () => {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-gray-700 mb-1">Categoría</label>
-                  <select className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden">
+                  <select value={newService.category} onChange={(e) => setNewService((s) => ({ ...s, category: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden">
                     {categories.filter((c) => c !== 'Todas').map((c) => (
                       <option key={c} value={c}>{c}</option>
                     ))}
@@ -193,7 +196,8 @@ export const ServicesCatalogView: React.FC = () => {
                   <label className="block font-bold text-gray-700 mb-1">Duración Baremada (min)</label>
                   <input
                     type="number"
-                    defaultValue={60}
+                    value={newService.durationMin}
+                    onChange={(e) => setNewService((s) => ({ ...s, durationMin: Number(e.target.value) }))}
                     className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden font-bold"
                   />
                 </div>
@@ -204,7 +208,8 @@ export const ServicesCatalogView: React.FC = () => {
                 <input
                   type="number"
                   step="5000"
-                  defaultValue={120000}
+                  value={newService.price}
+                  onChange={(e) => setNewService((s) => ({ ...s, price: Number(e.target.value) }))}
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 font-bold text-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 />
               </div>
@@ -214,6 +219,8 @@ export const ServicesCatalogView: React.FC = () => {
                 <textarea
                   rows={3}
                   placeholder="Detalla qué incluye la mano de obra, puntos de verificación..."
+                  value={newService.description}
+                  onChange={(e) => setNewService((s) => ({ ...s, description: e.target.value }))}
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 />
               </div>
@@ -227,7 +234,12 @@ export const ServicesCatalogView: React.FC = () => {
                 Cancelar
               </button>
               <button
-                onClick={() => setShowAddModal(false)}
+                onClick={async () => {
+                  if (!newService.name.trim()) return;
+                  await createService(newService);
+                  setShowAddModal(false);
+                  setNewService({ name: '', category: 'Mantenimiento', durationMin: 60, price: 120000, description: '' });
+                }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700"
               >
                 Guardar Servicio

@@ -10,6 +10,7 @@ import { DashboardView } from './components/dashboard/DashboardView';
 import { InventoryView } from './components/inventory/InventoryView';
 import { AttendanceView } from './components/attendance/AttendanceView';
 import { CustomersView } from './components/customers/CustomersView';
+import { VehiclesView } from './components/vehicles/VehiclesView';
 import { AppointmentsView } from './components/appointments/AppointmentsView';
 import { ServicesCatalogView } from './components/services/ServicesCatalogView';
 import { InvoicesView } from './components/invoices/InvoicesView';
@@ -34,6 +35,10 @@ const MainContent: React.FC = () => {
         return <AttendanceView />;
       case 'customers':
         return <CustomersView />;
+      case 'vehicles':
+        return <VehiclesView />;
+      case 'move-inventory':
+        return <InventoryView />;
       case 'appointments':
         return <AppointmentsView />;
       case 'services':

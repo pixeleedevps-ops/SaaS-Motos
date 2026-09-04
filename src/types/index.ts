@@ -3,6 +3,8 @@ export type ViewMode =
   | 'inventory'
   | 'attendance'
   | 'customers'
+  | 'vehicles'
+  | 'move-inventory'
   | 'services'
   | 'appointments'
   | 'actas'

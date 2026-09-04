@@ -14,6 +14,8 @@ import {
   Settings,
   LogOut,
   X,
+  Bike,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ViewMode } from '../../types';
@@ -65,6 +67,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
         },
         { id: 'attendance', label: 'Control de Asistencia', icon: Clock },
         { id: 'customers', label: 'Clientes & Vehículos', icon: Users },
+        { id: 'vehicles', label: 'Ver todos los vehículos', icon: Bike },
+        { id: 'move-inventory', label: 'Mover inventario', icon: ArrowRightLeft },
         { id: 'services', label: 'Catálogo de Servicios', icon: Wrench },
       ],
     },

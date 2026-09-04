@@ -105,6 +105,8 @@ interface AppContextType {
   createProduct: (product: Omit<ProductItem, 'id'>) => void;
   createCustomer: (cust: Partial<Customer>) => void;
   addMotorcycleToCustomer: (customerId: string, moto: Omit<Motorcycle, 'id'>) => void;
+  updateMotorcycle: (customerId: string, motorcycleId: string, moto: Partial<Motorcycle>) => Promise<void>;
+  deleteMotorcycle: (customerId: string, motorcycleId: string) => Promise<void>;
   updateCustomerNotes: (customerId: string, notes: string) => void;
   createInvoice: (invoice: Omit<Invoice, 'id' | 'invoiceNumber'>) => string;
   createActa: (acta: Omit<ActaTecnica, 'id' | 'actaNumber'>) => string;
@@ -112,6 +114,7 @@ interface AppContextType {
   addWarrantyClaim: (warrantyId: string, claim: Omit<WarrantyClaim, 'id' | 'claimCode'>) => void;
   updateWarrantyStatus: (warrantyId: string, status: WarrantyRecord['status']) => void;
   toggleServiceStatus: (serviceId: string) => void;
+  createService: (service: Omit<ServiceItem, 'id' | 'code' | 'isActive'>) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -439,6 +442,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       price: aptData.price || 180000,
     };
     setAppointments((prev) => [newApt, ...prev]);
+    if (supabase) {
+      void (async () => {
+        const [{ data: branch }, { data: service }] = await Promise.all([
+          supabase.from('sedes').select('id').eq('nombre', newApt.branch).maybeSingle(),
+          supabase.from('servicios').select('id').eq('id', newApt.serviceId).maybeSingle(),
+        ]);
+        const fecha = new Date(`${newApt.date.replace(/^Hoy,?\s*/i, new Date().toISOString().slice(0, 10))} ${newApt.time}`);
+        const { error } = await supabase.from('citas').insert({ cliente_id: newApt.customerId, servicio_id: service?.id || newApt.serviceId, sede_id: branch?.id, fecha_hora: Number.isNaN(fecha.getTime()) ? new Date().toISOString() : fecha.toISOString(), estado: 'confirmada', notas: newApt.notes || null });
+        if (error) { console.error('No fue posible guardar la cita en Supabase', error); showToast(`No se pudo guardar la cita: ${error.message}`, 'error'); }
+      })();
+    }
     logActivity('Nueva Cita Creada', `Cita ${code} para ${newApt.customerName} (${newApt.motorcycleModel})`, 'appointment');
     showToast(`Cita ${code} agendada con éxito para ${newApt.date}`, 'success');
   };
@@ -458,6 +472,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return p;
       })
     );
+    if (supabase) {
+      void (async () => {
+        const { data: row } = await supabase.from('inventario_sede').select('id, stock, sede_id, variante_id').eq('variante_id', id).order('stock', { ascending: false }).limit(1).maybeSingle();
+        if (!row) return;
+        const { error } = await supabase.from('inventario_sede').update({ stock: row.stock + amount }).eq('id', row.id);
+        if (!error) await supabase.from('movimientos_inventario').insert({ variante_id: row.variante_id, sede_id: row.sede_id, tipo: 'entrada', cantidad: amount, motivo: 'Reposición desde plataforma' });
+        if (error) { console.error('No fue posible actualizar inventario en Supabase', error); showToast(`No se pudo actualizar inventario: ${error.message}`, 'error'); }
+      })();
+    }
     showToast(`Stock repuesto (+${amount} unidades) correctamente`, 'success');
   };
 
@@ -467,6 +490,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 'PROD-' + Date.now(),
     };
     setProducts((prev) => [newProd, ...prev]);
+    if (supabase) {
+      void (async () => {
+        const { data: sede } = await supabase.from('sedes').select('id').eq('nombre', prodData.branch).maybeSingle();
+        const { data: inserted, error } = await supabase.from('productos').insert({ nombre: prodData.name, sku_base: prodData.sku, precio: prodData.salePrice, activo: true }).select('id').single();
+        if (error || !inserted) { console.error('No fue posible crear producto en Supabase', error); showToast(`No se pudo guardar el producto: ${error?.message || 'error'}`, 'error'); return; }
+        const { data: variant, error: variantError } = await supabase.from('variantes_producto').insert({ producto_id: inserted.id, sku: prodData.sku, precio_adicional: 0, activo: true }).select('id').single();
+        if (variantError || !variant) { showToast(`Producto creado, pero falló la variante: ${variantError?.message || 'error'}`, 'warning'); return; }
+        if (sede) await supabase.from('inventario_sede').insert({ variante_id: variant.id, sede_id: sede.id, stock: prodData.currentStock, stock_minimo: prodData.minStock });
+      })();
+    }
     logActivity('Nuevo Producto', `Se agregó ${newProd.name} (${newProd.sku}) al catálogo`, 'stock');
     showToast(`Producto ${newProd.name} agregado al inventario`, 'success');
   };
@@ -515,6 +548,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setSelectedCustomer((prev) => (prev ? { ...prev, motorcycles: [...prev.motorcycles, newMoto] } : null));
     }
     showToast(`Vehículo ${moto.brand} ${moto.model} (${moto.licensePlate}) añadido`, 'success');
+    if (supabase) void supabase.from('motos_clientes').insert({ cliente_id: customerId, marca: moto.brand, modelo: moto.model, anio: moto.year, placa: moto.licensePlate, cilindraje: moto.cylinderCapacity }).then(({ error }) => { if (error) showToast(`No se pudo guardar la moto: ${error.message}`, 'error'); });
+  };
+
+  const updateMotorcycle = async (customerId: string, motorcycleId: string, moto: Partial<Motorcycle>) => {
+    setCustomers((prev) => prev.map((c) => c.id === customerId ? { ...c, motorcycles: c.motorcycles.map((m) => m.id === motorcycleId ? { ...m, ...moto } : m) } : c));
+    if (supabase) { const { error } = await supabase.from('motos_clientes').update({ marca: moto.brand, modelo: moto.model, anio: moto.year, placa: moto.licensePlate, cilindraje: moto.cylinderCapacity }).eq('id', motorcycleId); if (error) { showToast(`No se pudo actualizar la moto: ${error.message}`, 'error'); return; } }
+    showToast('Motocicleta actualizada', 'success');
+  };
+
+  const deleteMotorcycle = async (customerId: string, motorcycleId: string) => {
+    if (supabase) { const { error } = await supabase.from('motos_clientes').delete().eq('id', motorcycleId); if (error) { showToast(`No se pudo borrar la moto: ${error.message}`, 'error'); return; } }
+    setCustomers((prev) => prev.map((c) => c.id === customerId ? { ...c, motorcycles: c.motorcycles.filter((m) => m.id !== motorcycleId) } : c));
+    showToast('Motocicleta eliminada', 'success');
   };
 
   const updateCustomerNotes = (customerId: string, notes: string) => {
@@ -695,6 +741,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Estado del servicio actualizado', 'info');
   };
 
+  const createService = async (serviceData: Omit<ServiceItem, 'id' | 'code' | 'isActive'>) => {
+    const type = serviceData.category.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+    if (supabase) {
+      const { data, error } = await supabase.from('servicios').insert({ nombre: serviceData.name, descripcion: serviceData.description || null, tipo: type, duracion_estimada_min: serviceData.durationMin, precio: serviceData.price, activo: true }).select('id').single();
+      if (error || !data) { showToast(`No se pudo guardar el servicio: ${error?.message || 'error'}`, 'error'); return; }
+      setServices((prev) => [{ ...serviceData, id: data.id, code: `SER-${data.id.slice(0, 8).toUpperCase()}`, isActive: true }, ...prev]);
+    } else setServices((prev) => [{ ...serviceData, id: `SER-${Date.now()}`, code: `SER-${Date.now()}`, isActive: true }, ...prev]);
+    showToast(`Servicio ${serviceData.name} creado correctamente`, 'success');
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -733,6 +789,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createProduct,
         createCustomer,
         addMotorcycleToCustomer,
+        updateMotorcycle,
+        deleteMotorcycle,
         updateCustomerNotes,
         createInvoice,
         createActa,
@@ -740,6 +798,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addWarrantyClaim,
         updateWarrantyStatus,
         toggleServiceStatus,
+        createService,
       }}
     >
       {children}
