@@ -83,7 +83,8 @@ export interface ServiceItem {
   id: string;
   code: string;
   name: string;
-  category: 'Mantenimiento' | 'Mecánica Rápida' | 'Motor y Transmisión' | 'Electricidad' | 'Diagnóstico' | 'Puesta a Punto' | 'Frenos y Neumáticos';
+  /** Display label derived from servicios.tipo; unknown future types are valid. */
+  category: string;
   durationMin: number;
   price: number;
   isActive: boolean;
@@ -253,4 +254,3 @@ export interface WarrantyRecord {
   // Claims
   claims: WarrantyClaim[];
 }
-

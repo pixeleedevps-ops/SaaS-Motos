@@ -25,18 +25,19 @@ export const ServicesCatalogView: React.FC = () => {
   const categories = [
     'Todas',
     'Mantenimiento',
-    'Mecánica Rápida',
-    'Motor y Transmisión',
-    'Electricidad',
+    'Instalación',
+    'Reparación',
     'Diagnóstico',
-    'Puesta a Punto',
+    ...Array.from(new Set(services.map((service) => service.category))).filter(
+      (category: string) => !['Mantenimiento', 'Instalación', 'Reparación', 'Diagnóstico'].includes(category),
+    ),
   ];
 
   const filteredServices = services.filter((s) => {
     const matchesSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.description.toLowerCase().includes(searchQuery.toLowerCase());
+      (s.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.code || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (s.description || '').toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesCat = selectedCategory === 'Todas' || s.category === selectedCategory;
     return matchesSearch && matchesCat;
@@ -151,6 +152,15 @@ export const ServicesCatalogView: React.FC = () => {
           </div>
         ))}
       </div>
+      {filteredServices.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center">
+          <Wrench className="mx-auto h-8 w-8 text-gray-400" />
+          <h3 className="mt-3 text-sm font-bold text-gray-900">No hay servicios para mostrar</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Verifica que existan registros en <code>public.servicios</code> y que el filtro seleccionado coincida con la columna <code>tipo</code>.
+          </p>
+        </div>
+      )}
 
       {/* Modal: Nuevo Servicio */}
       {showAddModal && (

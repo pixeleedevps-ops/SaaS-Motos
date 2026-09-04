@@ -12,10 +12,12 @@ import {
   ShieldCheck,
   BarChart3,
   Settings,
+  LogOut,
   X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ViewMode } from '../../types';
+import { isSupabaseConfigured, supabase } from '../../lib/supabase';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -28,6 +30,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const lowStockCount = products.filter((p) => p.currentStock <= p.minStock).length;
   const pendingAptsCount = appointments.filter((a) => a.status === 'Pendiente' || a.status === 'En Proceso').length;
   const activeClaimsCount = warranties.filter((w) => w.status === 'En Reclamación' || w.status === 'Por Vencer').length;
+
+  const signOut = async () => {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut();
+    if (error) return console.error('No fue posible cerrar sesión', error);
+    onClose();
+  };
 
   interface NavItem {
     id: ViewMode;
@@ -209,9 +218,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
             </div>
             <p className="text-[10px] text-slate-400">4 de 5 elevadores en servicio activo</p>
           </div>
+          {isSupabaseConfigured && (
+            <button
+              onClick={() => void signOut()}
+              className="mt-3 w-full flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs font-bold text-slate-300 hover:bg-slate-800 hover:text-white"
+            >
+              <LogOut className="w-4 h-4" />
+              Cerrar sesión
+            </button>
+          )}
         </div>
       </aside>
     </>
   );
 };
-

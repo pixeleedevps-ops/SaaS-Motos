@@ -26,6 +26,34 @@ import {
   INITIAL_WARRANTIES,
 } from '../data/mockData';
 import { formatCOP } from '../utils/formatters';
+import { isSupabaseConfigured, supabase } from '../lib/supabase';
+
+const toProductCategory = (value?: string): ProductItem['category'] => {
+  const normalized = value?.toLowerCase() ?? '';
+  if (normalized.includes('aceite') || normalized.includes('lubric')) return 'Aceites y Lubricantes';
+  if (normalized.includes('freno') || normalized.includes('neum')) return 'Frenos y Neumáticos';
+  if (normalized.includes('transmi')) return 'Transmisión';
+  if (normalized.includes('motor') || normalized.includes('filtro')) return 'Motor y Filtros';
+  if (normalized.includes('eléctric') || normalized.includes('electric')) return 'Eléctrico';
+  return 'Accesorios';
+};
+
+const toServiceCategory = (value?: string): ServiceItem['category'] => {
+  const categories: Record<string, ServiceItem['category']> = {
+    mantenimiento: 'Mantenimiento', instalacion: 'Instalación', reparacion: 'Reparación', diagnostico: 'Diagnóstico', otro: 'Otro',
+  };
+  const normalized = (value || 'otro').trim().toLowerCase();
+  if (categories[normalized]) return categories[normalized];
+  return normalized.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
+const toAppointmentStatus = (value: string): Appointment['status'] => ({
+  pendiente: 'Pendiente', confirmada: 'Confirmada', en_proceso: 'En Proceso', completada: 'Completada', cancelada: 'Cancelada',
+}[value] || 'Pendiente') as Appointment['status'];
+
+const toDatabaseAppointmentStatus = (value: Appointment['status']) => ({
+  Pendiente: 'pendiente', Confirmada: 'confirmada', 'En Proceso': 'en_proceso', Completada: 'completada', Cancelada: 'cancelada',
+}[value]);
 
 interface ToastInfo {
   id: string;
@@ -91,7 +119,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [selectedBranch, setSelectedBranch] = useState<string>('Sede Bogotá (Calle 80 - Principal)');
-  const [branches] = useState<string[]>(INITIAL_BRANCHES);
+  const [branches, setBranches] = useState<string[]>(INITIAL_BRANCHES);
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem('motopro_customers');
@@ -144,6 +172,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedActa, setSelectedActa] = useState<ActaTecnica | null>(null);
   const [selectedWarranty, setSelectedWarranty] = useState<WarrantyRecord | null>(null);
   const [toasts, setToasts] = useState<ToastInfo[]>([]);
+
+  // This runs only after AuthGate has established a Supabase session. Every
+  // request therefore carries the JWT needed for the RLS policies in the
+  // existing Spanish-schema database.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) return;
+    let active = true;
+    const loadRemoteData = async () => {
+      const [customersResult, productsResult, appointmentsResult, branchesResult, servicesResult, attendanceResult] = await Promise.all([
+        supabase.from('usuarios').select('id, nombre, apellido, email, telefono, documento, created_at, motos_clientes(*)').eq('rol', 'cliente').order('created_at', { ascending: false }),
+        supabase.from('productos').select('id, nombre, sku_base, precio, marcas(nombre), tipos_producto(nombre), variantes_producto(id, sku, precio_adicional, inventario_sede(stock, stock_minimo, sedes(nombre)))').eq('activo', true).order('nombre'),
+        supabase.from('citas').select('id, cliente_id, servicio_id, fecha_hora, estado, notas, usuarios!citas_cliente_id_fkey(nombre, apellido, telefono), servicios(nombre, precio, duracion_estimada_min), sedes(nombre), motos_clientes(marca, modelo, placa), empleados(usuarios(nombre, apellido))').order('fecha_hora', { ascending: false }),
+        supabase.from('sedes').select('nombre').eq('activo', true).order('nombre'),
+        // Explicit columns keep the client independent of future additions to
+        // the table and make the mapping from `tipo` deterministic.
+        supabase.from('servicios').select('id, nombre, descripcion, tipo, duracion_estimada_min, precio, activo').order('nombre'),
+        supabase.from('asistencia_empleados').select('id, fecha, hora_entrada, hora_salida, empleados(id, cargo, usuarios(nombre, apellido), sedes(nombre))').order('fecha', { ascending: false }),
+      ]);
+      if (!active) return;
+      [
+        ['clientes', customersResult.error], ['inventario', productsResult.error], ['citas', appointmentsResult.error],
+        ['sedes', branchesResult.error], ['servicios', servicesResult.error], ['asistencia', attendanceResult.error],
+      ].forEach(([module, error]) => { if (error) console.error(`No fue posible cargar ${module} desde Supabase`, error); });
+      if (branchesResult.data) setBranches(branchesResult.data.map((branch) => branch.nombre));
+      if (branchesResult.data?.length && !branchesResult.data.some((branch) => branch.nombre === selectedBranch)) {
+        setSelectedBranch(branchesResult.data[0].nombre);
+      }
+      if (customersResult.data) setCustomers(customersResult.data.map((customer: any) => ({
+        id: customer.id, name: [customer.nombre, customer.apellido].filter(Boolean).join(' '), cedula: customer.documento || undefined, email: customer.email || '', phone: customer.telefono || '',
+        address: '', city: '', isVIP: false, registrationDate: new Date(customer.created_at).toLocaleDateString('es-CO'), notes: '', totalSpent: 0, completedServicesCount: 0,
+        motorcycles: (customer.motos_clientes || []).map((motorcycle: any) => ({
+          id: motorcycle.id, brand: motorcycle.marca || '', model: motorcycle.modelo || '', year: motorcycle.anio || 0,
+          licensePlate: motorcycle.placa || '', vin: '', mileage: 0, color: '', cylinderCapacity: motorcycle.cilindraje || '',
+        })),
+      })));
+      if (productsResult.data) setProducts(productsResult.data.flatMap((product: any) => {
+        const variants = product.variantes_producto?.length
+          ? product.variantes_producto
+          : [{ id: product.id, sku: product.sku_base, precio_adicional: 0, inventario_sede: [] }];
+        return variants.flatMap((variant: any) => {
+        // A variant without stock is still shown as zero. Hiding it made a
+        // populated catalogue look empty whenever inventario_sede was pending.
+        const balances = variant.inventario_sede?.length ? variant.inventario_sede : [null];
+        return balances.map((inventory: any) => {
+          const stock = inventory?.stock || 0;
+          const minStock = inventory?.stock_minimo || 0;
+          return {
+            id: variant.id, sku: variant.sku || product.sku_base || '', name: product.nombre, brand: product.marcas?.nombre || '', category: toProductCategory(product.tipos_producto?.nombre),
+            branch: inventory?.sedes?.nombre || 'Sin ubicación', currentStock: stock, minStock,
+            maxStock: Math.max(stock, minStock * 2, 1), costPrice: 0, salePrice: Number(product.precio) + Number(variant.precio_adicional), location: '', lastRestocked: '',
+          };
+        });
+        });
+      }));
+      if (appointmentsResult.data) setAppointments(appointmentsResult.data.map((appointment: any) => ({
+        id: appointment.id, code: `CIT-${appointment.id.slice(0, 8).toUpperCase()}`, customerId: appointment.cliente_id,
+        customerName: [appointment.usuarios?.nombre, appointment.usuarios?.apellido].filter(Boolean).join(' ') || 'Cliente', customerPhone: appointment.usuarios?.telefono || '',
+        motorcyclePlate: appointment.motos_clientes?.placa || '', motorcycleModel: [appointment.motos_clientes?.marca, appointment.motos_clientes?.modelo].filter(Boolean).join(' '),
+        serviceId: appointment.servicio_id, serviceName: appointment.servicios?.nombre || 'Servicio', technicianName: [appointment.empleados?.usuarios?.nombre, appointment.empleados?.usuarios?.apellido].filter(Boolean).join(' '),
+        branch: appointment.sedes?.nombre || '', date: new Date(appointment.fecha_hora).toLocaleDateString('es-CO'),
+        time: new Date(appointment.fecha_hora).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+        status: toAppointmentStatus(appointment.estado), estimatedDurationMin: appointment.servicios?.duracion_estimada_min || 0, notes: appointment.notas || undefined,
+        price: Number(appointment.servicios?.precio || 0),
+      })));
+      if (servicesResult.data) setServices(servicesResult.data.map((service: any) => ({
+        id: service.id, code: `SER-${service.id.slice(0, 8).toUpperCase()}`, name: service.nombre, category: toServiceCategory(service.tipo),
+        durationMin: Number(service.duracion_estimada_min || 0), price: Number(service.precio || 0), isActive: service.activo !== false, description: service.descripcion || '',
+      })));
+      if (attendanceResult.data) setAttendance(attendanceResult.data.map((record: any) => {
+        const checkIn = record.hora_entrada ? new Date(record.hora_entrada) : null;
+        const checkOut = record.hora_salida ? new Date(record.hora_salida) : null;
+        const workedHours = checkIn && checkOut ? Number(((checkOut.getTime() - checkIn.getTime()) / 3_600_000).toFixed(2)) : undefined;
+        return {
+          id: record.id, employeeId: record.empleados?.id || '', employeeName: [record.empleados?.usuarios?.nombre, record.empleados?.usuarios?.apellido].filter(Boolean).join(' ') || 'Empleado',
+          employeeRole: record.empleados?.cargo || 'Empleado', branch: record.empleados?.sedes?.nombre || '', date: record.fecha,
+          checkIn: checkIn ? checkIn.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '—',
+          checkOut: checkOut ? checkOut.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : undefined,
+          status: checkOut ? 'Fuera' : 'En Turno', totalHoursWorked: workedHours, shift: 'Completo (09:00 - 18:00)',
+        };
+      }));
+    };
+    void loadRemoteData();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCustomer || !customers.some((customer) => customer.id === selectedCustomer.id)) {
+      setSelectedCustomer(customers[0] || null);
+    }
+  }, [customers, selectedCustomer]);
 
   // Sync to local storage
   useEffect(() => {
@@ -290,6 +408,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return apt;
       })
     );
+    if (supabase) {
+      void supabase.from('citas').update({ estado: toDatabaseAppointmentStatus(status) }).eq('id', id).then(({ error }) => {
+        if (error) console.error('No fue posible actualizar la cita en Supabase', error);
+      });
+    }
     showToast(`Cita actualizada a estado: ${status}`, 'success');
   };
 
@@ -364,6 +487,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       motorcycles: custData.motorcycles || [],
     };
     setCustomers((prev) => [newCust, ...prev]);
+    // `usuarios` is linked to auth.users and has no direct client-side insert
+    // policy. Creation must go through Supabase Auth (or a privileged Edge
+    // Function), so a browser cannot forge clients or bypass RLS.
     setSelectedCustomer(newCust);
     logActivity('Cliente Registrado', `Se dio de alta la ficha de ${newCust.name}`, 'appointment');
     showToast(`Cliente ${newCust.name} creado correctamente`, 'success');
@@ -560,6 +686,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setServices((prev) =>
       prev.map((s) => (s.id === serviceId ? { ...s, isActive: !s.isActive } : s))
     );
+    if (supabase) {
+      const service = services.find((item) => item.id === serviceId);
+      if (service) void supabase.from('servicios').update({ activo: !service.isActive }).eq('id', serviceId).then(({ error }) => {
+        if (error) console.error('No fue posible actualizar el servicio en Supabase', error);
+      });
+    }
     showToast('Estado del servicio actualizado', 'info');
   };
 
