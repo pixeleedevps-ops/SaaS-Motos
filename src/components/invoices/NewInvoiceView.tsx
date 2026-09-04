@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   PlusCircle,
   Trash2,
@@ -13,7 +13,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { InvoiceItem } from '../../types';
+import { Invoice, InvoiceItem } from '../../types';
 import { formatCOP } from '../../utils/formatters';
 
 export const NewInvoiceView: React.FC = () => {
@@ -21,7 +21,13 @@ export const NewInvoiceView: React.FC = () => {
 
   const [selectedCustomerId, setSelectedCustomerId] = useState(customers[0]?.id || '');
   const [paymentMethod, setPaymentMethod] = useState<'Tarjeta' | 'Transferencia' | 'Efectivo' | 'Financiación' | 'Nequi / Daviplata'>('Nequi / Daviplata');
+  const [invoiceStatus, setInvoiceStatus] = useState<Invoice['status']>('Pagada');
   const [invoiceNotes, setInvoiceNotes] = useState('Garantía de 6 meses en mano de obra y repuestos originales según normativa colombiana.');
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!selectedCustomerId && customers[0]) setSelectedCustomerId(customers[0].id);
+  }, [customers, selectedCustomerId]);
 
   // Items in current draft invoice
   const [items, setItems] = useState<InvoiceItem[]>([
@@ -54,6 +60,7 @@ export const NewInvoiceView: React.FC = () => {
     if (!srv) return;
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
+      referenceId: srv.id,
       description: srv.name,
       type: 'service',
       quantity: 1,
@@ -69,6 +76,7 @@ export const NewInvoiceView: React.FC = () => {
     if (!prod) return;
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
+      referenceId: prod.productId && prod.productId !== prod.id ? prod.id : undefined,
       description: prod.name,
       type: 'product',
       quantity: 1,
@@ -100,11 +108,12 @@ export const NewInvoiceView: React.FC = () => {
   const taxAmount = (subtotal * taxRate) / 100;
   const grandTotal = subtotal + taxAmount;
 
-  const handleSubmitInvoice = (e: React.FormEvent) => {
+  const handleSubmitInvoice = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (items.length === 0) return;
+    if (items.length === 0 || !activeCustomer) return;
+    setSubmitting(true);
 
-    const newId = createInvoice({
+    const newId = await createInvoice({
       customerId: activeCustomer.id,
       customerName: activeCustomer.name,
       customerNIF: activeCustomer.cedula || '1.020.893.412',
@@ -124,11 +133,12 @@ export const NewInvoiceView: React.FC = () => {
       discountTotal: 0,
       total: grandTotal,
       paymentMethod,
-      status: 'Pagada',
+      status: invoiceStatus,
       notes: invoiceNotes,
     });
 
-    navigateTo('invoices', { invoiceId: newId });
+    setSubmitting(false);
+    if (newId) navigateTo('invoices', { invoiceId: newId });
   };
 
   return (
@@ -157,7 +167,7 @@ export const NewInvoiceView: React.FC = () => {
           <h2 className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-4">
             Datos del Cliente & Vehículo
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
             <div>
               <label className="block font-bold text-gray-700 mb-1">Cliente *</label>
               <select
@@ -195,6 +205,18 @@ export const NewInvoiceView: React.FC = () => {
                 <option value="Transferencia">Transferencia Bancolombia / PSE</option>
                 <option value="Efectivo">Efectivo en Caja</option>
                 <option value="Financiación">Financiación / Crédito</option>
+              </select>
+            </div>
+            <div>
+              <label className="block font-bold text-gray-700 mb-1">Estado inicial *</label>
+              <select
+                value={invoiceStatus}
+                onChange={(e) => setInvoiceStatus(e.target.value as Invoice['status'])}
+                className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+              >
+                <option value="Pagada">Pagada</option>
+                <option value="Pendiente">Pendiente</option>
+                <option value="Borrador">Borrador</option>
               </select>
             </div>
           </div>
@@ -380,11 +402,11 @@ export const NewInvoiceView: React.FC = () => {
           </button>
           <button
             type="submit"
-            disabled={items.length === 0}
+            disabled={items.length === 0 || !activeCustomer || submitting}
             className="px-6 py-2.5 rounded-xl text-xs font-extrabold bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 disabled:opacity-50 transition-all flex items-center gap-2"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Emitir Factura Oficial & Cobrar</span>
+            <span>{submitting ? 'Guardando…' : 'Emitir Factura Oficial & Cobrar'}</span>
           </button>
         </div>
 

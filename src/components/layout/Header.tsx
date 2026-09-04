@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Wrench,
   Building2,
@@ -15,6 +15,17 @@ import {
   Menu,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import type { AppNotification } from '../../types';
+import {
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '../../services/notifications';
+import {
+  enablePushNotifications,
+  isFirebasePublicConfigReady,
+  listenForForegroundPush,
+} from '../../services/pushNotifications';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
@@ -37,10 +48,84 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showBranchSelect, setShowBranchSelect] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [userNotifications, setUserNotifications] = useState<AppNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [pushSetupMessage, setPushSetupMessage] = useState('');
+  const [enablingPush, setEnablingPush] = useState(false);
 
   const lowStockCount = products.filter((p) => p.currentStock <= p.minStock).length;
   const todayAppointments = appointments.filter((a) => a.date.includes('Hoy')).length;
-  const totalNotifications = lowStockCount + (todayAppointments > 0 ? 1 : 0);
+  const unreadNotifications = userNotifications.filter((notification) => !notification.readAt);
+  const totalNotifications = unreadNotifications.length + lowStockCount + (todayAppointments > 0 ? 1 : 0);
+
+  const refreshNotifications = async () => {
+    setNotificationsLoading(true);
+    try {
+      setUserNotifications(await listNotifications());
+    } catch (error) {
+      console.error('No fue posible cargar el centro de notificaciones', error);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showNotifications) void refreshNotifications();
+  }, [showNotifications]);
+
+  useEffect(() => {
+    let unsubscribe = () => undefined;
+    void listenForForegroundPush(() => {
+      void refreshNotifications();
+    }).then((listener) => { unsubscribe = listener; });
+    return () => unsubscribe();
+  }, []);
+
+  const activatePush = async () => {
+    setEnablingPush(true);
+    const result = await enablePushNotifications();
+    setPushSetupMessage('message' in result ? result.message : 'Notificaciones activadas en este dispositivo.');
+    setEnablingPush(false);
+  };
+
+  const openNotification = async (notification: AppNotification) => {
+    if (!notification.readAt) {
+      try {
+        await markNotificationRead(notification.id);
+        setUserNotifications((current) => current.map((item) => item.id === notification.id
+          ? { ...item, readAt: new Date().toISOString() }
+          : item));
+      } catch (error) {
+        console.error('No fue posible marcar la notificación como leída', error);
+      }
+    }
+    if (notification.url) {
+      const target = new URL(notification.url, window.location.origin);
+      const view = target.searchParams.get('view');
+      if (view === 'appointments') navigateTo('appointments');
+    }
+    setShowNotifications(false);
+  };
+
+  const markAllRead = async () => {
+    const ids = unreadNotifications.map((notification) => notification.id);
+    try {
+      await markAllNotificationsRead(ids);
+      const now = new Date().toISOString();
+      setUserNotifications((current) => current.map((notification) => ({ ...notification, readAt: notification.readAt || now })));
+    } catch (error) {
+      console.error('No fue posible marcar las notificaciones como leídas', error);
+    }
+  };
+
+  const relativeTime = (value: string) => {
+    const elapsedMinutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+    if (elapsedMinutes < 1) return 'Ahora';
+    if (elapsedMinutes < 60) return `Hace ${elapsedMinutes} min`;
+    const hours = Math.floor(elapsedMinutes / 60);
+    if (hours < 24) return `Hace ${hours} h`;
+    return `Hace ${Math.floor(hours / 24)} d`;
+  };
 
   const viewTitles: Record<string, string> = {
     dashboard: 'Panel General',
@@ -234,12 +319,48 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-xl shadow-xl border border-slate-200 p-3.5 z-50 animate-in fade-in slide-in-from-top-2">
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <span className="text-xs font-bold text-slate-800">Notificaciones del Taller</span>
-                <span className="text-[10px] text-indigo-600 font-bold cursor-pointer hover:underline">
+                <button onClick={() => void markAllRead()} className="text-[10px] text-indigo-600 font-bold hover:underline">
                   Marcar leídas
-                </span>
+                </button>
+              </div>
+
+              <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-2.5">
+                <p className="text-[11px] font-semibold text-indigo-950">
+                  Activa las notificaciones para recibir cambios de tus servicios y citas.
+                </p>
+                <button
+                  type="button"
+                  disabled={enablingPush || !isFirebasePublicConfigReady()}
+                  onClick={() => void activatePush()}
+                  className="mt-2 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {enablingPush ? 'Activando…' : 'Activar notificaciones'}
+                </button>
+                {!isFirebasePublicConfigReady() && (
+                  <p className="mt-1.5 text-[10px] text-indigo-700">Pendiente de configuración pública de Firebase.</p>
+                )}
+                {pushSetupMessage && <p className="mt-1.5 text-[10px] text-indigo-700">{pushSetupMessage}</p>}
               </div>
 
               <div className="space-y-2 mt-2 max-h-72 overflow-y-auto">
+                {notificationsLoading && <p className="p-2 text-center text-[11px] text-slate-500">Cargando…</p>}
+                {!notificationsLoading && userNotifications.map((notification) => (
+                  <button
+                    key={notification.id}
+                    onClick={() => void openNotification(notification)}
+                    className={`w-full rounded-lg border p-2.5 text-left transition-colors ${
+                      notification.readAt
+                        ? 'border-slate-100 bg-white hover:bg-slate-50'
+                        : 'border-indigo-100 bg-indigo-50/80 hover:bg-indigo-100/70'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-xs font-bold text-slate-900">{notification.title}</p>
+                      <span className="shrink-0 text-[9px] text-slate-500">{relativeTime(notification.createdAt)}</span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-600">{notification.message}</p>
+                  </button>
+                ))}
                 {lowStockCount > 0 && (
                   <div
                     onClick={() => {

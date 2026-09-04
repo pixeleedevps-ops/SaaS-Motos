@@ -10,6 +10,7 @@ import { DashboardView } from './components/dashboard/DashboardView';
 import { InventoryView } from './components/inventory/InventoryView';
 import { MoveInventoryView } from './components/inventory/MoveInventoryView';
 import { AttendanceView } from './components/attendance/AttendanceView';
+import { EmployeesView } from './components/employees/EmployeesView';
 import { CustomersView } from './components/customers/CustomersView';
 import { VehiclesView } from './components/vehicles/VehiclesView';
 import { AppointmentsView } from './components/appointments/AppointmentsView';
@@ -34,6 +35,8 @@ const MainContent: React.FC = () => {
         return <InventoryView />;
       case 'attendance':
         return <AttendanceView />;
+      case 'employees':
+        return <EmployeesView />;
       case 'customers':
         return <CustomersView />;
       case 'vehicles':
@@ -89,7 +92,13 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [document, setDocument] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -114,19 +123,51 @@ const AuthGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     if (!supabase) return;
     setSubmitting(true);
     setError('');
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-    if (signInError) setError(signInError.message);
+    setMessage('');
+    if (mode === 'register') {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: {
+          data: {
+            nombre: firstName.trim(),
+            apellido: lastName.trim(),
+            telefono: phone.trim(),
+            documento: document.trim(),
+          },
+        },
+      });
+      if (signUpError) setError(signUpError.message);
+      else if (!data.session) setMessage('Cuenta creada. Revisa tu correo para confirmar el acceso.');
+    } else {
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) setError(signInError.message);
+    }
     setSubmitting(false);
   };
 
   return (
     <main className="min-h-screen grid place-items-center bg-slate-950 p-6">
       <form onSubmit={signIn} className="w-full max-w-md rounded-2xl bg-white p-8 shadow-2xl space-y-5">
-        <div><p className="text-sm font-bold text-indigo-600">MOTOPRO</p><h1 className="text-2xl font-extrabold text-slate-900">Iniciar sesión</h1><p className="mt-1 text-sm text-slate-500">Accede con tu usuario autorizado de Supabase.</p></div>
+        <div><p className="text-sm font-bold text-indigo-600">MOTOPRO</p><h1 className="text-2xl font-extrabold text-slate-900">{mode === 'login' ? 'Iniciar sesión' : 'Crear cuenta de cliente'}</h1><p className="mt-1 text-sm text-slate-500">{mode === 'login' ? 'Accede con tu usuario autorizado de Supabase.' : 'Tu perfil se crea en Supabase con rol cliente.'}</p></div>
+        {mode === 'register' && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm font-semibold text-slate-700">Nombre<input required value={firstName} onChange={(event) => setFirstName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+              <label className="block text-sm font-semibold text-slate-700">Apellido<input required value={lastName} onChange={(event) => setLastName(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+            </div>
+            <label className="block text-sm font-semibold text-slate-700">Teléfono<input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+            <label className="block text-sm font-semibold text-slate-700">Documento / cédula<input required value={document} onChange={(event) => setDocument(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+          </>
+        )}
         <label className="block text-sm font-semibold text-slate-700">Correo<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
-        <label className="block text-sm font-semibold text-slate-700">Contraseña<input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+        <label className="block text-sm font-semibold text-slate-700">Contraseña<input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
         {error && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
-        <button disabled={submitting} className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-bold text-white disabled:opacity-60">{submitting ? 'Ingresando…' : 'Ingresar'}</button>
+        {message && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p>}
+        <button disabled={submitting} className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 font-bold text-white disabled:opacity-60">{submitting ? 'Procesando…' : mode === 'login' ? 'Ingresar' : 'Registrarme'}</button>
+        <button type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); setMessage(''); }} className="w-full text-sm font-semibold text-indigo-600 hover:underline">
+          {mode === 'login' ? 'Crear cuenta de cliente' : 'Ya tengo una cuenta'}
+        </button>
       </form>
     </main>
   );
