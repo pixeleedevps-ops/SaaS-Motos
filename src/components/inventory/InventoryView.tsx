@@ -17,7 +17,34 @@ import { ProductItem } from '../../types';
 import { formatCOP } from '../../utils/formatters';
 
 export const InventoryView: React.FC = () => {
-  const { products, createProduct, restockProduct, selectedBranch } = useApp();
+  const {
+    products,
+    createProduct,
+    restockProduct,
+    selectedBranch,
+    branches,
+    productBrands,
+    productCategories,
+    canManageInventory,
+  } = useApp();
+
+  const emptyProduct = (): Omit<ProductItem, 'id'> => ({
+    sku: '',
+    name: '',
+    description: '',
+    imageUrl: '',
+    brand: productBrands[0]?.name || '',
+    category: productCategories[0]?.name || '',
+    branch: branches.includes(selectedBranch) ? selectedBranch : branches[0] || '',
+    isActive: true,
+    currentStock: 0,
+    minStock: 5,
+    maxStock: 10,
+    costPrice: 0,
+    salePrice: 0,
+    location: '',
+    lastRestocked: 'Hoy',
+  });
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
@@ -25,32 +52,12 @@ export const InventoryView: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [restockItem, setRestockItem] = useState<ProductItem | null>(null);
   const [restockQty, setRestockQty] = useState(10);
+  const [isCreating, setIsCreating] = useState(false);
 
   // New product form state
-  const [newProd, setNewProd] = useState<Omit<ProductItem, 'id'>>({
-    sku: '',
-    name: '',
-    brand: '',
-    category: 'Aceites y Lubricantes',
-    branch: selectedBranch,
-    currentStock: 10,
-    minStock: 5,
-    maxStock: 30,
-    costPrice: 150000,
-    salePrice: 240000,
-    location: 'Estantería A-01',
-    lastRestocked: 'Hoy',
-  });
+  const [newProd, setNewProd] = useState<Omit<ProductItem, 'id'>>(emptyProduct);
 
-  const categories = [
-    'Todas',
-    'Aceites y Lubricantes',
-    'Frenos y Neumáticos',
-    'Transmisión',
-    'Motor y Filtros',
-    'Accesorios',
-    'Eléctrico',
-  ];
+  const categories = ['Todas', ...new Set([...productCategories.map((category) => category.name), ...products.map((product) => product.category)])];
 
   const filteredProducts = products.filter((p) => {
     const matchesSearch =
@@ -69,25 +76,15 @@ export const InventoryView: React.FC = () => {
     return matchesSearch && matchesCategory && matchesStock;
   });
 
-  const handleCreateProduct = (e: React.FormEvent) => {
+  const handleCreateProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newProd.name || !newProd.sku) return;
-    createProduct(newProd);
+    if (!newProd.name || !newProd.sku || !newProd.brand || !newProd.category || !newProd.branch) return;
+    setIsCreating(true);
+    const created = await createProduct({ ...newProd, location: newProd.branch });
+    setIsCreating(false);
+    if (!created) return;
     setShowAddModal(false);
-    setNewProd({
-      sku: '',
-      name: '',
-      brand: '',
-      category: 'Aceites y Lubricantes',
-      branch: selectedBranch,
-      currentStock: 10,
-      minStock: 5,
-      maxStock: 30,
-      costPrice: 150000,
-      salePrice: 240000,
-      location: 'Estantería A-01',
-      lastRestocked: 'Hoy',
-    });
+    setNewProd(emptyProduct());
   };
 
   const handleConfirmRestock = () => {
@@ -103,15 +100,20 @@ export const InventoryView: React.FC = () => {
       {/* Header & Primary Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Inventario & Recambios</h1>
+          <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Control de inventarios</h1>
           <p className="text-xs sm:text-sm text-gray-600">
             Control de stock, lubricantes, consumibles y piezas de recambio para motocicletas.
           </p>
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-colors flex items-center gap-2"
+            onClick={() => {
+              setNewProd(emptyProduct());
+              setShowAddModal(true);
+            }}
+            disabled={!canManageInventory}
+            title={!canManageInventory ? 'Solo administradores y empleados pueden añadir productos' : undefined}
+            className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-colors flex items-center gap-2 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus className="w-4 h-4" />
             <span>Añadir Producto</span>
@@ -246,8 +248,8 @@ export const InventoryView: React.FC = () => {
 
                     {/* Location */}
                     <td className="py-3.5 px-4">
-                      <div className="font-semibold text-gray-800">{prod.location}</div>
-                      <div className="text-[10px] text-gray-600">{prod.branch}</div>
+                      <div className="font-semibold text-gray-800">{prod.branch}</div>
+                      <div className="text-[10px] text-gray-600">Sede asignada al producto</div>
                     </td>
 
                     {/* Status Badge */}
@@ -316,15 +318,27 @@ export const InventoryView: React.FC = () => {
                 </div>
                 <div>
                   <label className="block font-bold text-gray-700 mb-1">Marca Fabricante *</label>
-                  <input
-                    type="text"
+                  <select
                     required
-                    placeholder="ej. Motul, Brembo, DID"
                     value={newProd.brand}
                     onChange={(e) => setNewProd({ ...newProd, brand: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  >
+                    <option value="" disabled>Seleccionar marca</option>
+                    {productBrands.map((brand) => <option key={brand.id} value={brand.name}>{brand.name}</option>)}
+                  </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Descripción</label>
+                <textarea
+                  rows={3}
+                  placeholder="Características, referencia y observaciones del producto"
+                  value={newProd.description || ''}
+                  onChange={(e) => setNewProd({ ...newProd, description: e.target.value })}
+                  className="w-full resize-none px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                />
               </div>
 
               <div>
@@ -343,28 +357,30 @@ export const InventoryView: React.FC = () => {
                 <div>
                   <label className="block font-bold text-gray-700 mb-1">Categoría</label>
                   <select
+                    required
                     value={newProd.category}
-                    onChange={(e) => setNewProd({ ...newProd, category: e.target.value as any })}
+                    onChange={(e) => setNewProd({ ...newProd, category: e.target.value })}
                     className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                   >
-                    {categories.filter((c) => c !== 'Todas').map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
+                    <option value="" disabled>Seleccionar categoría</option>
+                    {productCategories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="block font-bold text-gray-700 mb-1">Ubicación en Almacén</label>
-                  <input
-                    type="text"
-                    placeholder="ej. Estantería B-04"
-                    value={newProd.location}
-                    onChange={(e) => setNewProd({ ...newProd, location: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
+                  <label className="block font-bold text-gray-700 mb-1">Sede / Ubicación *</label>
+                  <select
+                    required
+                    value={newProd.branch}
+                    onChange={(e) => setNewProd({ ...newProd, branch: e.target.value, location: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  >
+                    <option value="" disabled>Seleccionar sede</option>
+                    {branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                  </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-gray-700 mb-1">Stock Inicial</label>
                   <input
@@ -385,16 +401,6 @@ export const InventoryView: React.FC = () => {
                     className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                   />
                 </div>
-                <div>
-                  <label className="block font-bold text-gray-700 mb-1">Capacidad Máx</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={newProd.maxStock}
-                    onChange={(e) => setNewProd({ ...newProd, maxStock: parseInt(e.target.value) || 10 })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -402,6 +408,8 @@ export const InventoryView: React.FC = () => {
                   <label className="block font-bold text-gray-700 mb-1">Precio Costo Proveedor ($ COP)</label>
                   <input
                     type="number"
+                    required
+                    min="0"
                     step="1000"
                     value={newProd.costPrice}
                     onChange={(e) => setNewProd({ ...newProd, costPrice: parseFloat(e.target.value) || 0 })}
@@ -412,6 +420,8 @@ export const InventoryView: React.FC = () => {
                   <label className="block font-bold text-gray-700 mb-1">PVP Venta al Público ($ COP)</label>
                   <input
                     type="number"
+                    required
+                    min="0"
                     step="1000"
                     value={newProd.salePrice}
                     onChange={(e) => setNewProd({ ...newProd, salePrice: parseFloat(e.target.value) || 0 })}
@@ -419,6 +429,27 @@ export const InventoryView: React.FC = () => {
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">URL de imagen</label>
+                <input
+                  type="url"
+                  placeholder="https://..."
+                  value={newProd.imageUrl || ''}
+                  onChange={(e) => setNewProd({ ...newProd, imageUrl: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 font-semibold text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={newProd.isActive !== false}
+                  onChange={(e) => setNewProd({ ...newProd, isActive: e.target.checked })}
+                  className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                Producto activo y disponible para la operación
+              </label>
 
               <div className="mt-6 flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
                 <button
@@ -430,9 +461,10 @@ export const InventoryView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-200"
+                  disabled={isCreating}
+                  className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-200 disabled:cursor-wait disabled:opacity-60"
                 >
-                  Guardar Producto
+                  {isCreating ? 'Guardando en Supabase…' : 'Guardar Producto'}
                 </button>
               </div>
             </form>

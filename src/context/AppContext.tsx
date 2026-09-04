@@ -38,6 +38,27 @@ const toProductCategory = (value?: string): ProductItem['category'] => {
   return 'Accesorios';
 };
 
+export type AppUserRole = 'admin' | 'empleado' | 'cliente' | null;
+
+export interface CatalogOption {
+  id: string;
+  name: string;
+}
+
+const UNKNOWN_BRANCH = 'Sin ubicación';
+
+const isKnownBranchName = (value?: string) => Boolean(value?.trim() && value.trim() !== UNKNOWN_BRANCH);
+
+const normalizeProductBranch = (product: ProductItem): ProductItem => {
+  const branch = isKnownBranchName(product.branch)
+    ? product.branch.trim()
+    : isKnownBranchName(product.location)
+      ? product.location.trim()
+      : UNKNOWN_BRANCH;
+
+  return { ...product, branch, location: branch };
+};
+
 const toServiceCategory = (value?: string): ServiceItem['category'] => {
   const categories: Record<string, ServiceItem['category']> = {
     mantenimiento: 'Mantenimiento', instalacion: 'Instalación', reparacion: 'Reparación', diagnostico: 'Diagnóstico', otro: 'Otro',
@@ -67,6 +88,10 @@ interface AppContextType {
   selectedBranch: string;
   setSelectedBranch: (branch: string) => void;
   branches: string[];
+  currentUserRole: AppUserRole;
+  canManageInventory: boolean;
+  productBrands: CatalogOption[];
+  productCategories: CatalogOption[];
   
   // Data
   customers: Customer[];
@@ -102,7 +127,8 @@ interface AppContextType {
   updateAppointmentStatus: (id: string, status: Appointment['status']) => void;
   createAppointment: (apt: Partial<Appointment>) => void;
   restockProduct: (id: string, amount: number) => void;
-  createProduct: (product: Omit<ProductItem, 'id'>) => void;
+  createProduct: (product: Omit<ProductItem, 'id'>) => Promise<boolean>;
+  moveProductToBranch: (productId: string, branch: string) => Promise<boolean>;
   createCustomer: (cust: Partial<Customer>) => void;
   addMotorcycleToCustomer: (customerId: string, moto: Omit<Motorcycle, 'id'>) => void;
   updateMotorcycle: (customerId: string, motorcycleId: string, moto: Partial<Motorcycle>) => Promise<void>;
@@ -123,6 +149,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [selectedBranch, setSelectedBranch] = useState<string>('Sede Bogotá (Calle 80 - Principal)');
   const [branches, setBranches] = useState<string[]>(INITIAL_BRANCHES);
+  const [branchOptions, setBranchOptions] = useState<CatalogOption[]>(() => INITIAL_BRANCHES.map((name) => ({ id: name, name })));
+  const [currentUserRole, setCurrentUserRole] = useState<AppUserRole>(isSupabaseConfigured ? null : 'admin');
+  const [productBrands, setProductBrands] = useState<CatalogOption[]>(() => [...new Set(INITIAL_PRODUCTS.map((product) => product.brand))].map((name) => ({ id: name, name })));
+  const [productCategories, setProductCategories] = useState<CatalogOption[]>(() => [...new Set(INITIAL_PRODUCTS.map((product) => product.category))].map((name) => ({ id: name, name })));
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem('motopro_customers');
@@ -131,7 +161,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [products, setProducts] = useState<ProductItem[]>(() => {
     const saved = localStorage.getItem('motopro_products');
-    return saved ? JSON.parse(saved) : INITIAL_PRODUCTS;
+    return saved
+      ? (JSON.parse(saved) as ProductItem[]).map(normalizeProductBranch)
+      : INITIAL_PRODUCTS.map(normalizeProductBranch);
   });
 
   const [services, setServices] = useState<ServiceItem[]>(() => {
@@ -183,24 +215,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isSupabaseConfigured || !supabase) return;
     let active = true;
     const loadRemoteData = async () => {
-      const [customersResult, productsResult, appointmentsResult, branchesResult, servicesResult, attendanceResult] = await Promise.all([
+      const { data: { user } } = await supabase.auth.getUser();
+      const [customersResult, productsResult, productCostsResult, appointmentsResult, branchesResult, servicesResult, attendanceResult, profileResult, brandsResult, categoriesResult] = await Promise.all([
         supabase.from('usuarios').select('id, nombre, apellido, email, telefono, documento, created_at, motos_clientes(*)').eq('rol', 'cliente').order('created_at', { ascending: false }),
-        supabase.from('productos').select('id, nombre, sku_base, precio, marcas(nombre), tipos_producto(nombre), variantes_producto(id, sku, precio_adicional, inventario_sede(stock, stock_minimo, sedes(nombre)))').eq('activo', true).order('nombre'),
+        supabase.from('productos').select('id, nombre, descripcion, imagen_url, sku_base, precio, activo, sede_id, sede:sedes!productos_sede_id_fkey(id, nombre), marcas(nombre), tipos_producto(nombre), variantes_producto(id, sku, precio_adicional, inventario_sede(stock, stock_minimo, sedes(nombre)))').order('nombre'),
+        // `costo` is introduced by the companion SQL patch. Keeping it in a
+        // separate request lets existing databases continue loading products
+        // until that patch is applied.
+        supabase.from('productos').select('id, costo'),
         supabase.from('citas').select('id, cliente_id, servicio_id, fecha_hora, estado, notas, usuarios!citas_cliente_id_fkey(nombre, apellido, telefono), servicios(nombre, precio, duracion_estimada_min), sedes(nombre), motos_clientes(marca, modelo, placa), empleados(usuarios(nombre, apellido))').order('fecha_hora', { ascending: false }),
-        supabase.from('sedes').select('nombre').eq('activo', true).order('nombre'),
+        // Load every branch so an existing product assigned to an inactive
+        // branch still shows its name. Only active branches become options for
+        // new products and transfers below.
+        supabase.from('sedes').select('id, nombre, activo').order('nombre'),
         // Explicit columns keep the client independent of future additions to
         // the table and make the mapping from `tipo` deterministic.
         supabase.from('servicios').select('id, nombre, descripcion, tipo, duracion_estimada_min, precio, activo').order('nombre'),
         supabase.from('asistencia_empleados').select('id, fecha, hora_entrada, hora_salida, empleados(id, cargo, usuarios(nombre, apellido), sedes(nombre))').order('fecha', { ascending: false }),
+        user ? supabase.from('usuarios').select('rol').eq('id', user.id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        supabase.from('marcas').select('id, nombre').order('nombre'),
+        supabase.from('tipos_producto').select('id, nombre').order('nombre'),
       ]);
       if (!active) return;
       [
         ['clientes', customersResult.error], ['inventario', productsResult.error], ['citas', appointmentsResult.error],
         ['sedes', branchesResult.error], ['servicios', servicesResult.error], ['asistencia', attendanceResult.error],
+        ['perfil', profileResult.error], ['marcas', brandsResult.error], ['categorías', categoriesResult.error],
       ].forEach(([module, error]) => { if (error) console.error(`No fue posible cargar ${module} desde Supabase`, error); });
-      if (branchesResult.data) setBranches(branchesResult.data.map((branch) => branch.nombre));
-      if (branchesResult.data?.length && !branchesResult.data.some((branch) => branch.nombre === selectedBranch)) {
-        setSelectedBranch(branchesResult.data[0].nombre);
+      if (profileResult.data?.rol) setCurrentUserRole(profileResult.data.rol as AppUserRole);
+      if (brandsResult.data) setProductBrands(brandsResult.data.map((brand) => ({ id: brand.id, name: brand.nombre })));
+      if (categoriesResult.data) setProductCategories(categoriesResult.data.map((category) => ({ id: category.id, name: category.nombre })));
+      if (branchesResult.data) {
+        const locations = branchesResult.data
+          .filter((branch) => branch.activo !== false)
+          .map((branch) => ({ id: branch.id, name: branch.nombre }));
+        setBranchOptions(locations);
+        setBranches(locations.map((branch) => branch.name));
+      }
+      const activeBranches = branchesResult.data?.filter((branch) => branch.activo !== false) || [];
+      if (activeBranches.length && !activeBranches.some((branch) => branch.nombre === selectedBranch)) {
+        setSelectedBranch(activeBranches[0].nombre);
       }
       if (customersResult.data) setCustomers(customersResult.data.map((customer: any) => ({
         id: customer.id, name: [customer.nombre, customer.apellido].filter(Boolean).join(' '), cedula: customer.documento || undefined, email: customer.email || '', phone: customer.telefono || '',
@@ -211,6 +265,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })),
       })));
       if (productsResult.data) setProducts(productsResult.data.flatMap((product: any) => {
+        const productCost = (productCostsResult.data as Array<{ id: string; costo: number }> | null)?.find((item) => item.id === product.id)?.costo;
+        const branchFromId = branchesResult.data?.find((branch) => branch.id === product.sede_id)?.nombre;
         const variants = product.variantes_producto?.length
           ? product.variantes_producto
           : [{ id: product.id, sku: product.sku_base, precio_adicional: 0, inventario_sede: [] }];
@@ -221,10 +277,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return balances.map((inventory: any) => {
           const stock = inventory?.stock || 0;
           const minStock = inventory?.stock_minimo || 0;
+          // productos.sede_id is the canonical location. Resolve its display
+          // name from the separately loaded branch catalogue first, then use
+          // embedded relations only as fallbacks.
+          const branchName = branchFromId
+            || product.sede?.nombre
+            || inventory?.sedes?.nombre
+            || UNKNOWN_BRANCH;
           return {
-            id: variant.id, sku: variant.sku || product.sku_base || '', name: product.nombre, brand: product.marcas?.nombre || '', category: toProductCategory(product.tipos_producto?.nombre),
-            branch: inventory?.sedes?.nombre || 'Sin ubicación', currentStock: stock, minStock,
-            maxStock: Math.max(stock, minStock * 2, 1), costPrice: 0, salePrice: Number(product.precio) + Number(variant.precio_adicional), location: '', lastRestocked: '',
+            id: variant.id, productId: product.id, sku: variant.sku || product.sku_base || '', name: product.nombre,
+            description: product.descripcion || '', imageUrl: product.imagen_url || '', brand: product.marcas?.nombre || '', category: product.tipos_producto?.nombre || toProductCategory(),
+            branchId: product.sede_id, branch: branchName, isActive: product.activo !== false,
+            currentStock: stock, minStock, maxStock: Math.max(stock, minStock * 2, 1), costPrice: Number(productCost || 0),
+            salePrice: Number(product.precio) + Number(variant.precio_adicional), location: branchName, lastRestocked: '',
           };
         });
         });
@@ -484,24 +549,85 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast(`Stock repuesto (+${amount} unidades) correctamente`, 'success');
   };
 
-  const createProduct = (prodData: Omit<ProductItem, 'id'>) => {
-    const newProd: ProductItem = {
-      ...prodData,
-      id: 'PROD-' + Date.now(),
-    };
-    setProducts((prev) => [newProd, ...prev]);
-    if (supabase) {
-      void (async () => {
-        const { data: sede } = await supabase.from('sedes').select('id').eq('nombre', prodData.branch).maybeSingle();
-        const { data: inserted, error } = await supabase.from('productos').insert({ nombre: prodData.name, sku_base: prodData.sku, precio: prodData.salePrice, activo: true }).select('id').single();
-        if (error || !inserted) { console.error('No fue posible crear producto en Supabase', error); showToast(`No se pudo guardar el producto: ${error?.message || 'error'}`, 'error'); return; }
-        const { data: variant, error: variantError } = await supabase.from('variantes_producto').insert({ producto_id: inserted.id, sku: prodData.sku, precio_adicional: 0, activo: true }).select('id').single();
-        if (variantError || !variant) { showToast(`Producto creado, pero falló la variante: ${variantError?.message || 'error'}`, 'warning'); return; }
-        if (sede) await supabase.from('inventario_sede').insert({ variante_id: variant.id, sede_id: sede.id, stock: prodData.currentStock, stock_minimo: prodData.minStock });
-      })();
+  const createProduct = async (prodData: Omit<ProductItem, 'id'>): Promise<boolean> => {
+    if (!canManageInventory) {
+      showToast('Solo administradores y empleados pueden añadir productos', 'error');
+      return false;
     }
-    logActivity('Nuevo Producto', `Se agregó ${newProd.name} (${newProd.sku}) al catálogo`, 'stock');
-    showToast(`Producto ${newProd.name} agregado al inventario`, 'success');
+
+    const branch = branchOptions.find((item) => item.name === prodData.branch);
+    const brand = productBrands.find((item) => item.name === prodData.brand);
+    const category = productCategories.find((item) => item.name === prodData.category);
+    if (!branch || !brand || !category) {
+      showToast('Selecciona una sede, marca y categoría válidas', 'error');
+      return false;
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase.rpc('crear_producto_inventario', {
+        p_nombre: prodData.name.trim(),
+        p_descripcion: prodData.description?.trim() || null,
+        p_sku: prodData.sku.trim(),
+        p_marca_id: brand.id,
+        p_tipo_id: category.id,
+        p_sede_id: branch.id,
+        p_costo: prodData.costPrice,
+        p_precio: prodData.salePrice,
+        p_imagen_url: prodData.imageUrl?.trim() || null,
+        p_stock_inicial: prodData.currentStock,
+        p_stock_minimo: prodData.minStock,
+        p_activo: prodData.isActive !== false,
+      });
+      if (error || !data) {
+        console.error('No fue posible crear producto en Supabase', error);
+        showToast(`No se pudo guardar el producto: ${error?.message || 'error desconocido'}`, 'error');
+        return false;
+      }
+      const result = data as { producto_id: string; variante_id: string };
+      const newProd: ProductItem = { ...prodData, id: result.variante_id, productId: result.producto_id, branchId: branch.id };
+      setProducts((prev) => [newProd, ...prev]);
+    } else {
+      setProducts((prev) => [{ ...prodData, id: `PROD-${Date.now()}`, productId: `PROD-${Date.now()}`, branchId: branch.id }, ...prev]);
+    }
+    logActivity('Nuevo Producto', `Se agregó ${prodData.name} (${prodData.sku}) en ${prodData.branch}`, 'stock');
+    showToast(`Producto ${prodData.name} agregado al inventario`, 'success');
+    return true;
+  };
+
+  const canManageInventory = currentUserRole === 'admin' || currentUserRole === 'empleado';
+
+  const moveProductToBranch = async (productId: string, branchName: string): Promise<boolean> => {
+    if (!canManageInventory) {
+      showToast('Tu perfil no tiene permiso para mover inventario', 'error');
+      return false;
+    }
+    const destination = branchOptions.find((branch) => branch.name === branchName);
+    const product = products.find((item) => (item.productId || item.id) === productId);
+    if (!destination || !product) {
+      showToast('No se encontró el producto o la sede de destino', 'error');
+      return false;
+    }
+    if (product.branchId === destination.id) return true;
+
+    if (supabase) {
+      const { error } = await supabase.rpc('mover_producto_sede', {
+        p_producto_id: productId,
+        p_sede_destino_id: destination.id,
+      });
+      if (error) {
+        console.error('No fue posible mover el producto en Supabase', error);
+        showToast(`No se pudo mover el producto: ${error.message}`, 'error');
+        return false;
+      }
+    }
+
+    const previousBranch = product.branch;
+    setProducts((prev) => prev.map((item) => (item.productId || item.id) === productId
+      ? { ...item, branchId: destination.id, branch: destination.name, location: destination.name }
+      : item));
+    logActivity('Inventario trasladado', `${product.name}: ${previousBranch} → ${destination.name}`, 'stock');
+    showToast(`${product.name} fue trasladado a ${destination.name}`, 'success');
+    return true;
   };
 
   const createCustomer = (custData: Partial<Customer>) => {
@@ -759,6 +885,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectedBranch,
         setSelectedBranch,
         branches,
+        currentUserRole,
+        canManageInventory,
+        productBrands,
+        productCategories,
         customers,
         products,
         services,
@@ -787,6 +917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createAppointment,
         restockProduct,
         createProduct,
+        moveProductToBranch,
         createCustomer,
         addMotorcycleToCustomer,
         updateMotorcycle,

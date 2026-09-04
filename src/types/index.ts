@@ -67,11 +67,16 @@ export interface Appointment {
 
 export interface ProductItem {
   id: string;
+  productId?: string;
   sku: string;
   name: string;
   brand: string;
-  category: 'Aceites y Lubricantes' | 'Frenos y Neumáticos' | 'Transmisión' | 'Motor y Filtros' | 'Accesorios' | 'Eléctrico';
+  category: string;
+  description?: string;
+  imageUrl?: string;
+  branchId?: string;
   branch: string;
+  isActive?: boolean;
   currentStock: number;
   minStock: number;
   maxStock: number;
