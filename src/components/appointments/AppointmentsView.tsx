@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays,
   Clock,
@@ -21,6 +21,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { Appointment } from '../../types';
 import { formatCOP } from '../../utils/formatters';
+import { searchCustomers } from '../../services/customers';
 
 export const AppointmentsView: React.FC = () => {
   const {
@@ -31,6 +32,8 @@ export const AppointmentsView: React.FC = () => {
     createAppointment,
     customers,
     services,
+    employees,
+    showToast,
     navigateTo,
     selectedBranch,
   } = useApp();
@@ -41,12 +44,35 @@ export const AppointmentsView: React.FC = () => {
   const [isDrawerOpen, setIsDrawerOpen] = useState(!!selectedAppointment);
 
   // New appointment form state
-  const [newCustomerId, setNewCustomerId] = useState(customers[0]?.id || '');
+  const [customerQuery, setCustomerQuery] = useState('');
+  const [customerResults, setCustomerResults] = useState(customers.slice(0, 15));
+  const [newCustomerId, setNewCustomerId] = useState('');
+  const [newMotorcycleId, setNewMotorcycleId] = useState('');
   const [newServiceId, setNewServiceId] = useState(services[0]?.id || '');
-  const [newDate, setNewDate] = useState('Hoy');
+  const [newDate, setNewDate] = useState(new Date().toISOString().slice(0, 10));
   const [newTime, setNewTime] = useState('11:00');
-  const [newTech, setNewTech] = useState('Carlos Rodríguez');
+  const [newTechId, setNewTechId] = useState('');
   const [newNotes, setNewNotes] = useState('');
+
+  const selectedCustomerForAppointment = customerResults.find((customer) => customer.id === newCustomerId)
+    || customers.find((customer) => customer.id === newCustomerId);
+  const availableMotorcycles = selectedCustomerForAppointment?.motorcycles.filter((motorcycle) => motorcycle.isActive !== false) || [];
+  const technicians = useMemo(() => employees.filter((employee) => employee.isActive && /técnic|tecnic|mecánic|mecanic|electric|especialista/i.test(`${employee.role} ${employee.name}`)), [employees]);
+
+  useEffect(() => {
+    if (!showNewAptModal) return;
+    const timer = window.setTimeout(() => {
+      void searchCustomers(customerQuery).then(setCustomerResults).catch((error) => {
+        console.error('No fue posible buscar clientes', error);
+        showToast('No fue posible buscar clientes.', 'error');
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [customerQuery, showNewAptModal]);
+
+  useEffect(() => {
+    setNewMotorcycleId(availableMotorcycles.length === 1 ? availableMotorcycles[0].id : '');
+  }, [newCustomerId]);
 
   const activeApt = selectedAppointment;
 
@@ -70,32 +96,46 @@ export const AppointmentsView: React.FC = () => {
     setIsDrawerOpen(false);
   };
 
-  const handleCreateAptSubmit = (e: React.FormEvent) => {
+  const handleCreateAptSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cust = customers.find((c) => c.id === newCustomerId) || customers[0];
+    const cust = selectedCustomerForAppointment;
     const srv = services.find((s) => s.id === newServiceId) || services[0];
-    const moto = cust.motorcycles[0] || { licensePlate: 'UWE-48E', model: 'Moto Estándar' };
+    const moto = cust?.motorcycles.find((motorcycle) => motorcycle.id === newMotorcycleId);
+    const technician = technicians.find((employee) => employee.id === newTechId);
+    if (!cust || !srv || !moto || !technician) {
+      showToast('Selecciona cliente, vehículo, servicio y técnico.', 'error');
+      return;
+    }
 
-    createAppointment({
+    const created = await createAppointment({
       customerId: cust.id,
       customerName: cust.name,
       customerPhone: cust.phone,
+      customerDocument: cust.cedula,
       customerAvatar: cust.avatar,
+      motorcycleId: moto.id,
       motorcyclePlate: moto.licensePlate,
       motorcycleModel: `${moto.brand || 'Moto'} ${moto.model}`,
       serviceId: srv.id,
       serviceName: srv.name,
-      technicianName: newTech,
+      technicianId: technician.id,
+      technicianName: `${technician.name} ${technician.lastName}`.trim(),
       branch: selectedBranch,
-      date: `${newDate}, ${newTime}`,
+      date: newDate,
       time: newTime,
+      scheduledAt: new Date(`${newDate}T${newTime}:00`).toISOString(),
       estimatedDurationMin: srv.durationMin,
       price: srv.price,
       notes: newNotes,
     });
 
-    setShowNewAptModal(false);
-    setNewNotes('');
+    if (created) {
+      setShowNewAptModal(false);
+      setNewNotes('');
+      setCustomerQuery('');
+      setNewCustomerId('');
+      setNewMotorcycleId('');
+    }
   };
 
   return (
@@ -404,19 +444,48 @@ export const AppointmentsView: React.FC = () => {
 
             <form onSubmit={handleCreateAptSubmit} className="mt-4 space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-gray-700 mb-1">Seleccionar Cliente *</label>
-                <select
-                  value={newCustomerId}
-                  onChange={(e) => setNewCustomerId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} — {c.phone} ({c.motorcycles.map((m) => m.licensePlate).join(', ')})
-                    </option>
+                <label className="block font-bold text-gray-700 mb-1">Buscar cliente *</label>
+                <input
+                  type="search"
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery(e.target.value)}
+                  placeholder="Cédula, teléfono, nombre, apellido o correo"
+                  className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                />
+                <div className="mt-2 max-h-36 overflow-y-auto rounded-xl border border-gray-200 divide-y divide-gray-100">
+                  {customerResults.map((customer) => (
+                    <button
+                      key={customer.id}
+                      type="button"
+                      onClick={() => setNewCustomerId(customer.id)}
+                      className={`w-full p-2.5 text-left ${newCustomerId === customer.id ? 'bg-indigo-50 text-indigo-900' : 'hover:bg-gray-50'}`}
+                    >
+                      <span className="block font-bold">{customer.name}</span>
+                      <span className="text-[10px] text-gray-600">Documento: {customer.cedula || '—'} · Tel: {customer.phone || '—'}</span>
+                    </button>
                   ))}
-                </select>
+                  {customerResults.length === 0 && <p className="p-3 text-center text-gray-500">No se encontraron clientes.</p>}
+                </div>
               </div>
+
+              {selectedCustomerForAppointment && (
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Vehículo del cliente *</label>
+                  {availableMotorcycles.length ? (
+                    <select value={newMotorcycleId} onChange={(e) => setNewMotorcycleId(e.target.value)} required className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white">
+                      <option value="">Seleccionar vehículo</option>
+                      {availableMotorcycles.map((motorcycle) => (
+                        <option key={motorcycle.id} value={motorcycle.id}>{motorcycle.brand} {motorcycle.model} — {motorcycle.licensePlate}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800">
+                      Este cliente no tiene vehículos registrados.{' '}
+                      <button type="button" onClick={() => navigateTo('customers', { customerId: selectedCustomerForAppointment.id })} className="font-bold underline">+ Registrar vehículo</button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-gray-700 mb-1">Servicio a Realizar *</label>
@@ -437,8 +506,8 @@ export const AppointmentsView: React.FC = () => {
                 <div>
                   <label className="block font-bold text-gray-700 mb-1">Día</label>
                   <input
-                    type="text"
-                    defaultValue="Hoy"
+                  type="date"
+                    value={newDate}
                     onChange={(e) => setNewDate(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden font-semibold"
                   />
@@ -457,13 +526,15 @@ export const AppointmentsView: React.FC = () => {
               <div>
                 <label className="block font-bold text-gray-700 mb-1">Técnico Mecánico Asignado</label>
                 <select
-                  value={newTech}
-                  onChange={(e) => setNewTech(e.target.value)}
+                  value={newTechId}
+                  onChange={(e) => setNewTechId(e.target.value)}
+                  required
                   className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
                 >
-                  <option value="Carlos Rodríguez">Carlos Rodríguez (Mecánico Jefe)</option>
-                  <option value="Andrés Gómez">Andrés Gómez (Especialista Motores)</option>
-                  <option value="Jhon Fredy Osorio">Jhon Fredy Osorio (Técnico Eléctrico)</option>
+                  <option value="">Seleccionar técnico activo</option>
+                  {technicians.map((technician) => (
+                    <option key={technician.id} value={technician.id}>{technician.name} {technician.lastName} ({technician.role})</option>
+                  ))}
                 </select>
               </div>
 

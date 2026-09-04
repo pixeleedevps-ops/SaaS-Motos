@@ -28,11 +28,14 @@ export const CustomersView: React.FC = () => {
     selectedCustomer,
     setSelectedCustomer,
     createCustomer,
+    updateCustomer,
+    toggleCustomerStatus,
     addMotorcycleToCustomer,
     updateCustomerNotes,
     navigateTo,
     invoices,
     appointments,
+    currentUserRole,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -42,17 +45,17 @@ export const CustomersView: React.FC = () => {
 
   // Modals
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
   const [showAddMotoModal, setShowAddMotoModal] = useState(false);
 
   // New customer form
-  const [newCust, setNewCust] = useState<Partial<Customer>>({
-    name: '',
+  const [newCust, setNewCust] = useState<Partial<Customer> & { password?: string }>({
+    firstName: '',
+    lastName: '',
+    cedula: '',
     email: '',
     phone: '',
-    address: '',
-    city: 'Bogotá D.C.',
-    isVIP: false,
-    notes: '',
+    password: '',
   });
 
   // New motorcycle form
@@ -71,6 +74,7 @@ export const CustomersView: React.FC = () => {
 
   const filteredCustomers = customers.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (c.cedula || '').includes(searchQuery) ||
     c.phone.includes(searchQuery) ||
     c.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.motorcycles.some((m) => m.licensePlate.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -86,26 +90,27 @@ export const CustomersView: React.FC = () => {
     }
   };
 
-  const handleCreateCustomer = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCust.name || !newCust.phone) return;
-    createCustomer(newCust);
-    setShowAddCustomerModal(false);
-    setNewCust({
-      name: '',
-      email: '',
-      phone: '',
-      address: '',
-      city: 'Bogotá D.C.',
-      isVIP: false,
-      notes: '',
-    });
+  const resetCustomerForm = () => {
+    setNewCust({ firstName: '', lastName: '', cedula: '', email: '', phone: '', password: '' });
+    setEditingCustomerId(null);
   };
 
-  const handleAddMoto = (e: React.FormEvent) => {
+  const handleCreateCustomer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const success = editingCustomerId
+      ? await updateCustomer(editingCustomerId, newCust)
+      : await createCustomer(newCust);
+    if (success) {
+      setShowAddCustomerModal(false);
+      resetCustomerForm();
+    }
+  };
+
+  const handleAddMoto = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMoto.model || !newMoto.licensePlate || !activeCustomer) return;
-    addMotorcycleToCustomer(activeCustomer.id, newMoto);
+    const created = await addMotorcycleToCustomer(activeCustomer.id, newMoto);
+    if (!created) return;
     setShowAddMotoModal(false);
     setNewMoto({
       brand: 'Yamaha',
@@ -131,7 +136,7 @@ export const CustomersView: React.FC = () => {
           </p>
         </div>
         <button
-          onClick={() => setShowAddCustomerModal(true)}
+          onClick={() => { resetCustomerForm(); setShowAddCustomerModal(true); }}
           className="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-700 shadow-md shadow-indigo-200 transition-colors flex items-center gap-2"
         >
           <Plus className="w-4 h-4" />
@@ -240,6 +245,10 @@ export const CustomersView: React.FC = () => {
                         <span>{activeCustomer.email}</span>
                       </div>
                       <div className="flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-gray-600" />
+                        <span>Documento: {activeCustomer.cedula || 'Sin registrar'}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-gray-600" />
                         <span>{activeCustomer.address}, {activeCustomer.city}</span>
                       </div>
@@ -249,6 +258,28 @@ export const CustomersView: React.FC = () => {
 
                 {/* Quick actions for this customer */}
                 <div className="flex items-center gap-2 self-start">
+                  {currentUserRole === 'admin' && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setEditingCustomerId(activeCustomer.id);
+                          setNewCust({
+                            firstName: activeCustomer.firstName || activeCustomer.name.split(' ')[0],
+                            lastName: activeCustomer.lastName || activeCustomer.name.split(' ').slice(1).join(' '),
+                            cedula: activeCustomer.cedula || '',
+                            email: activeCustomer.email,
+                            phone: activeCustomer.phone,
+                          });
+                          setShowAddCustomerModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs"
+                      >Editar</button>
+                      <button
+                        onClick={() => void toggleCustomerStatus(activeCustomer.id)}
+                        className="px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs"
+                      >{activeCustomer.isActive === false ? 'Reactivar' : 'Desactivar'}</button>
+                    </>
+                  )}
                   <button
                     onClick={() => setShowAddMotoModal(true)}
                     className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors flex items-center gap-1.5"
@@ -554,26 +585,25 @@ export const CustomersView: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-gray-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl animate-in zoom-in-95">
             <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-              <h3 className="text-base font-bold text-gray-900">Dar de Alta Nuevo Cliente</h3>
+              <h3 className="text-base font-bold text-gray-900">{editingCustomerId ? 'Editar Cliente' : 'Dar de Alta Nuevo Cliente'}</h3>
               <button onClick={() => setShowAddCustomerModal(false)} className="text-gray-600 hover:text-gray-600">✕</button>
             </div>
 
             <form onSubmit={handleCreateCustomer} className="mt-4 space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-gray-700 mb-1">Nombre Completo *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="ej. Santiago Pérez López"
-                  value={newCust.name}
-                  onChange={(e) => setNewCust({ ...newCust, name: e.target.value })}
-                  className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden font-semibold"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Nombre *</label>
+                  <input type="text" required value={newCust.firstName || ''} onChange={(e) => setNewCust({ ...newCust, firstName: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-300" />
+                </div>
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Apellido *</label>
+                  <input type="text" required value={newCust.lastName || ''} onChange={(e) => setNewCust({ ...newCust, lastName: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-300" />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold text-gray-700 mb-1">Teléfono Móvil / WhatsApp *</label>
+                  <label className="block font-bold text-gray-700 mb-1">Teléfono móvil *</label>
                   <input
                     type="tel"
                     required
@@ -584,9 +614,10 @@ export const CustomersView: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-gray-700 mb-1">Email</label>
+                  <label className="block font-bold text-gray-700 mb-1">Email *</label>
                   <input
                     type="email"
+                    required
                     placeholder="cliente@email.com"
                     value={newCust.email}
                     onChange={(e) => setNewCust({ ...newCust, email: e.target.value })}
@@ -595,41 +626,18 @@ export const CustomersView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-gray-700 mb-1">Dirección</label>
-                  <input
-                    type="text"
-                    placeholder="ej. Cra 15 # 85-32, Chapinero"
-                    value={newCust.address}
-                    onChange={(e) => setNewCust({ ...newCust, address: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-gray-700 mb-1">Ciudad</label>
-                  <input
-                    type="text"
-                    placeholder="Bogotá D.C. / Medellín / Cali"
-                    value={newCust.city}
-                    onChange={(e) => setNewCust({ ...newCust, city: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                </div>
+              <div>
+                <label className="block font-bold text-gray-700 mb-1">Número de documento / cédula *</label>
+                <input type="text" required value={newCust.cedula || ''} onChange={(e) => setNewCust({ ...newCust, cedula: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-300" />
               </div>
 
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="vip-check"
-                  checked={newCust.isVIP}
-                  onChange={(e) => setNewCust({ ...newCust, isVIP: e.target.checked })}
-                  className="w-4 h-4 rounded-sm text-indigo-600 focus:ring-indigo-500"
-                />
-                <label htmlFor="vip-check" className="font-bold text-gray-800">
-                  Marcar como Cliente VIP (Descuentos especiales & prioridad de elevador)
-                </label>
-              </div>
+              {!editingCustomerId && (
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Contraseña inicial *</label>
+                  <input type="password" minLength={8} required value={newCust.password || ''} onChange={(e) => setNewCust({ ...newCust, password: e.target.value })} className="w-full px-3 py-2 rounded-xl border border-gray-300" />
+                  <p className="mt-1 text-[10px] text-gray-500">Mínimo 8 caracteres. El backend asigna siempre el rol cliente.</p>
+                </div>
+              )}
 
               <div className="mt-6 flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
                 <button
@@ -643,7 +651,7 @@ export const CustomersView: React.FC = () => {
                   type="submit"
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-200"
                 >
-                  Crear Ficha de Cliente
+                  {editingCustomerId ? 'Guardar cambios' : 'Crear Ficha de Cliente'}
                 </button>
               </div>
             </form>

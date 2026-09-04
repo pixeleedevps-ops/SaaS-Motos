@@ -1,0 +1,17 @@
+{
+  "name": "MotoPro Taller",
+  "short_name": "MotoPro",
+  "description": "Gestión de servicios, citas e inventario para talleres de motocicletas.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020617",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/icons/motopro.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

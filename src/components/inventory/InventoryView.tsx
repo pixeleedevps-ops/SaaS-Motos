@@ -330,6 +330,33 @@ export const InventoryView: React.FC = () => {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Duración de garantía</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newProd.warrantyDuration || ''}
+                    onChange={(e) => setNewProd({ ...newProd, warrantyDuration: e.target.value ? Number(e.target.value) : undefined })}
+                    placeholder="Ej. 3"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Unidad de garantía</label>
+                  <select
+                    value={newProd.warrantyUnit || ''}
+                    onChange={(e) => setNewProd({ ...newProd, warrantyUnit: (e.target.value || undefined) as ProductItem['warrantyUnit'] })}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white"
+                  >
+                    <option value="">Sin garantía configurada</option>
+                    <option value="dias">Días</option>
+                    <option value="meses">Meses</option>
+                    <option value="anios">Años</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-gray-700 mb-1">Descripción</label>
                 <textarea

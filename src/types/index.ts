@@ -2,6 +2,7 @@ export type ViewMode =
   | 'dashboard'
   | 'inventory'
   | 'attendance'
+  | 'employees'
   | 'customers'
   | 'vehicles'
   | 'move-inventory'
@@ -24,11 +25,14 @@ export interface Motorcycle {
   mileage: number;
   color: string;
   cylinderCapacity: string;
+  isActive?: boolean;
 }
 
 export interface Customer {
   id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   cedula?: string; // Número de Cédula de Ciudadanía / NIT
   email: string;
   phone: string;
@@ -42,6 +46,7 @@ export interface Customer {
   totalSpent: number;
   completedServicesCount: number;
   nextRevisionDate?: string;
+  isActive?: boolean;
 }
 
 export interface Appointment {
@@ -50,12 +55,16 @@ export interface Appointment {
   customerId: string;
   customerName: string;
   customerPhone: string;
+  customerDocument?: string;
   customerAvatar?: string;
   motorcyclePlate: string;
   motorcycleModel: string;
+  motorcycleId?: string;
   serviceId: string;
   serviceName: string;
   technicianName: string;
+  technicianId?: string;
+  branchId?: string;
   branch: string;
   date: string;
   time: string;
@@ -63,6 +72,7 @@ export interface Appointment {
   estimatedDurationMin: number;
   notes?: string;
   price: number;
+  scheduledAt?: string;
 }
 
 export interface ProductItem {
@@ -84,6 +94,8 @@ export interface ProductItem {
   salePrice: number;
   location: string;
   lastRestocked: string;
+  warrantyDuration?: number;
+  warrantyUnit?: 'dias' | 'meses' | 'anios';
 }
 
 export interface ServiceItem {
@@ -97,6 +109,19 @@ export interface ServiceItem {
   isActive: boolean;
   description: string;
   requiredParts?: string[];
+  warrantyDuration?: number;
+  warrantyUnit?: 'dias' | 'meses' | 'anios';
+}
+
+export interface AppNotification {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  status: 'pending' | 'processing' | 'sent' | 'failed';
+  readAt?: string;
+  createdAt: string;
+  url?: string;
 }
 
 export interface AttendanceRecord {
@@ -112,6 +137,21 @@ export interface AttendanceRecord {
   status: 'En Turno' | 'Retraso' | 'Fuera' | 'Pausa';
   totalHoursWorked?: number;
   shift: 'Mañana (08:00 - 16:00)' | 'Tarde (14:00 - 22:00)' | 'Completo (09:00 - 18:00)' | 'Mañana (08:00 - 17:00)' | 'Completo (08:30 - 18:00)' | 'Tarde (13:00 - 21:00)';
+}
+
+export interface Employee {
+  id: string;
+  userId?: string;
+  name: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  document: string;
+  role: string;
+  branchId: string;
+  branch: string;
+  hireDate: string;
+  isActive: boolean;
 }
 
 export interface InspectionCheckItem {
@@ -155,6 +195,7 @@ export interface ActaTecnica {
 
 export interface InvoiceItem {
   id: string;
+  referenceId?: string;
   description: string;
   sku?: string;
   type: 'product' | 'service';

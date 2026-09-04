@@ -66,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           badgeColor: 'bg-rose-500/20 text-rose-300 font-bold border border-rose-500/30',
         },
         { id: 'attendance', label: 'Control de Asistencia', icon: Clock },
+        { id: 'employees', label: 'Catálogo de Empleados', icon: Users },
         { id: 'customers', label: 'Clientes & Vehículos', icon: Users },
         { id: 'vehicles', label: 'Ver todos los vehículos', icon: Bike },
         { id: 'move-inventory', label: 'Mover inventario', icon: ArrowRightLeft },

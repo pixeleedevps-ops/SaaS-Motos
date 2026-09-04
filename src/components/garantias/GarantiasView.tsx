@@ -43,6 +43,7 @@ export const GarantiasView: React.FC = () => {
     customers,
     products,
     services,
+    invoices,
     createWarranty,
     addWarrantyClaim,
     updateWarrantyStatus,
@@ -177,12 +178,12 @@ export const GarantiasView: React.FC = () => {
     globalSearch;
 
   // Handle claim submission
-  const handleCreateClaim = (e: React.FormEvent) => {
+  const handleCreateClaim = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedWarranty) return;
 
     const todayStr = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
-    addWarrantyClaim(selectedWarranty.id, {
+    const created = await addWarrantyClaim(selectedWarranty.id, {
       date: todayStr,
       reason: claimReason,
       description: claimDescription,
@@ -192,14 +193,18 @@ export const GarantiasView: React.FC = () => {
       costCovered: parseFloat(claimCostCovered) || 0,
     });
 
-    setClaimReason('');
-    setClaimDescription('');
-    setShowClaimModal(false);
+    if (created) {
+      setClaimReason('');
+      setClaimDescription('');
+      setShowClaimModal(false);
+    }
   };
 
   // Handle new manual warranty creation
-  const handleCreateWarrantyManual = (e: React.FormEvent) => {
+  const handleCreateWarrantyManual = async (e: React.FormEvent) => {
     e.preventDefault();
+    const invoice = invoices.find((item) => item.invoiceNumber === newInvoiceNumber);
+    if (!invoice) return;
 
     const todayStr = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
     const months = parseInt(newWarrantyMonths, 10) || 6;
@@ -207,26 +212,26 @@ export const GarantiasView: React.FC = () => {
     expDate.setMonth(expDate.getMonth() + months);
     const expDateStr = expDate.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' });
 
-    createWarranty({
+    const created = await createWarranty({
       type: newType,
       itemName: newItemName || (newType === 'service' ? 'Mantenimiento General' : 'Recambio Especializado'),
       category: newType === 'service' ? 'Servicio Mecánico' : 'Repuesto Original',
       sku: newType === 'product' ? (newSku || 'SKU-GEN-001') : undefined,
       brand: newBrand || 'MotoPro Oficial',
-      invoiceId: 'INV-MANUAL-' + Date.now(),
-      invoiceNumber: newInvoiceNumber || `FAC-2025-${Math.floor(1000 + Math.random() * 9000)}`,
+      invoiceId: invoice.id,
+      invoiceNumber: invoice.invoiceNumber,
       itemPrice: parseFloat(newItemPrice) || 0,
       quantity: 1,
       paymentMethod: 'Tarjeta',
-      customerId: 'CUST-MANUAL',
-      customerName: newCustomerName || 'Cliente Particular',
-      customerCedula: newCustomerCedula || '1.020.456.789',
-      customerPhone: newCustomerPhone || '+57 310 456 7890',
-      customerEmail: newCustomerEmail || 'cliente@motopro.com.co',
-      motorcyclePlate: newPlate.toUpperCase() || 'UWE-48E',
-      motorcycleModel: newModel || 'Yamaha MT-07 ABS',
-      branch: newBranch || selectedBranch,
-      purchaseDate: todayStr,
+      customerId: invoice.customerId,
+      customerName: invoice.customerName,
+      customerCedula: invoice.customerNIF,
+      customerPhone: invoice.customerPhone,
+      customerEmail: invoice.customerEmail,
+      motorcyclePlate: invoice.motorcyclePlate || newPlate.toUpperCase(),
+      motorcycleModel: invoice.motorcycleModel || newModel,
+      branch: invoice.branch,
+      purchaseDate: invoice.issueDate || todayStr,
       warrantyMonths: months,
       expirationDate: expDateStr,
       mechanicName: newType === 'service' ? newMechanicName : undefined,
@@ -241,7 +246,7 @@ export const GarantiasView: React.FC = () => {
       status: 'Activa',
     });
 
-    setShowNewWarrantyModal(false);
+    if (created) setShowNewWarrantyModal(false);
   };
 
   // Helper badge styles
@@ -1342,59 +1347,35 @@ export const GarantiasView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Client Info Grid */}
+              {/* La garantía siempre se vincula a una compra persistente. */}
               <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
                 <span className="text-[11px] font-black uppercase text-slate-800 tracking-wider">
-                  1. Información del Cliente
+                  1. Compra / Factura de origen
                 </span>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Cédula de Ciudadanía / NIT *</label>
-                    <input
-                      type="text"
-                      required
-                      value={newCustomerCedula}
-                      onChange={(e) => setNewCustomerCedula(e.target.value.toUpperCase())}
-                      placeholder="Ej. 1.020.456.789"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Nombre del Cliente *</label>
-                    <input
-                      type="text"
-                      required
-                      value={newCustomerName}
-                      onChange={(e) => setNewCustomerName(e.target.value)}
-                      placeholder="Ej. Carlos Mendoza"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Teléfono</label>
-                    <input
-                      type="text"
-                      value={newCustomerPhone}
-                      onChange={(e) => setNewCustomerPhone(e.target.value)}
-                      placeholder="+57 310 456 7890"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Email</label>
-                    <input
-                      type="email"
-                      value={newCustomerEmail}
-                      onChange={(e) => setNewCustomerEmail(e.target.value)}
-                      placeholder="carlos.mendoza@email.com"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                  </div>
-                </div>
+                <select
+                  required
+                  value={newInvoiceNumber}
+                  onChange={(e) => {
+                    const selected = invoices.find((invoice) => invoice.invoiceNumber === e.target.value);
+                    setNewInvoiceNumber(e.target.value);
+                    if (selected) {
+                      setNewCustomerName(selected.customerName);
+                      setNewCustomerCedula(selected.customerNIF);
+                      setNewCustomerPhone(selected.customerPhone);
+                      setNewCustomerEmail(selected.customerEmail);
+                      setNewPlate(selected.motorcyclePlate || '');
+                      setNewModel(selected.motorcycleModel || '');
+                      setNewBranch(selected.branch);
+                    }
+                  }}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-semibold"
+                >
+                  <option value="">Seleccionar una factura existente</option>
+                  {invoices.filter((invoice) => invoice.status !== 'Anulada').map((invoice) => (
+                    <option key={invoice.id} value={invoice.invoiceNumber}>{invoice.invoiceNumber} — {invoice.customerName} — {invoice.issueDate}</option>
+                  ))}
+                </select>
+                {newInvoiceNumber && <p className="text-[11px] text-slate-600">Cliente: {newCustomerName} · Documento: {newCustomerCedula || '—'}</p>}
               </div>
 
               {/* Vehicle & Sede Info Grid */}
@@ -1408,7 +1389,6 @@ export const GarantiasView: React.FC = () => {
                     <label className="text-[11px] font-bold text-slate-700">Placa de la Moto *</label>
                     <input
                       type="text"
-                      required
                       value={newPlate}
                       onChange={(e) => setNewPlate(e.target.value.toUpperCase())}
                       placeholder="Ej. UWE-48E"
@@ -1441,18 +1421,7 @@ export const GarantiasView: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700">Nº de Factura</label>
-                    <input
-                      type="text"
-                      value={newInvoiceNumber}
-                      onChange={(e) => setNewInvoiceNumber(e.target.value.toUpperCase())}
-                      placeholder="FAC-2025-XXXX"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                  </div>
-
+                <div className="grid grid-cols-1 gap-3 pt-2">
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-slate-700">Precio / Importe ($ COP)</label>
                     <input

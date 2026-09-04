@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Receipt,
   Plus,
@@ -21,11 +21,24 @@ import { Invoice } from '../../types';
 import { formatCOP } from '../../utils/formatters';
 
 export const InvoicesView: React.FC = () => {
-  const { invoices, selectedInvoice, setSelectedInvoice, navigateTo } = useApp();
+  const { invoices, selectedInvoice, setSelectedInvoice, navigateTo, updateInvoiceStatus, currentUserRole } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('Todas');
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(selectedInvoice || invoices[0] || null);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  useEffect(() => {
+    setActiveInvoice((current) => selectedInvoice || invoices.find((invoice) => invoice.id === current?.id) || invoices[0] || null);
+  }, [invoices, selectedInvoice]);
+
+  const changeStatus = async (status: Invoice['status']) => {
+    if (!activeInvoice) return;
+    setUpdatingStatus(true);
+    const updated = await updateInvoiceStatus(activeInvoice.id, status);
+    if (updated) setActiveInvoice({ ...activeInvoice, status });
+    setUpdatingStatus(false);
+  };
 
   const filteredInvoices = invoices.filter((inv) => {
     const matchesSearch =
@@ -93,7 +106,7 @@ export const InvoicesView: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
-            {['Todas', 'Pagada', 'Pendiente'].map((st) => (
+            {['Todas', 'Pagada', 'Pendiente', 'Borrador', 'Anulada'].map((st) => (
               <button
                 key={st}
                 onClick={() => setStatusFilter(st)}
@@ -127,7 +140,11 @@ export const InvoicesView: React.FC = () => {
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                             inv.status === 'Pagada'
                               ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
+                              : inv.status === 'Anulada'
+                                ? 'bg-rose-100 text-rose-800'
+                                : inv.status === 'Borrador'
+                                  ? 'bg-gray-100 text-gray-700'
+                                  : 'bg-amber-100 text-amber-800'
                           }`}
                         >
                           {inv.status}
@@ -157,6 +174,20 @@ export const InvoicesView: React.FC = () => {
                 Visor de Factura Oficial
               </span>
               <div className="flex items-center gap-2">
+                {(currentUserRole === 'admin' || currentUserRole === 'empleado') && (
+                  <select
+                    aria-label="Cambiar estado de factura"
+                    disabled={updatingStatus}
+                    value={activeInvoice.status}
+                    onChange={(event) => void changeStatus(event.target.value as Invoice['status'])}
+                    className="rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs font-bold text-gray-700 disabled:opacity-60"
+                  >
+                    <option value="Borrador">Borrador</option>
+                    <option value="Pendiente">Pendiente</option>
+                    <option value="Pagada">Pagada</option>
+                    <option value="Anulada">Anulada</option>
+                  </select>
+                )}
                 <button
                   onClick={() => window.print()}
                   className="px-3 py-1.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs transition-colors flex items-center gap-1.5"
@@ -191,7 +222,11 @@ export const InvoicesView: React.FC = () => {
                     className={`inline-block mt-2 px-2.5 py-0.5 rounded-md text-[10px] font-bold ${
                       activeInvoice.status === 'Pagada'
                         ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800'
+                        : activeInvoice.status === 'Anulada'
+                          ? 'bg-rose-100 text-rose-800'
+                          : activeInvoice.status === 'Borrador'
+                            ? 'bg-gray-100 text-gray-700'
+                            : 'bg-amber-100 text-amber-800'
                     }`}
                   >
                     ESTADO: {activeInvoice.status.toUpperCase()}

@@ -21,7 +21,11 @@ export const ServicesCatalogView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('Todas');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newService, setNewService] = useState({ name: '', category: 'Mantenimiento', durationMin: 60, price: 120000, description: '' });
+  const emptyService: Omit<ServiceItem, 'id' | 'code' | 'isActive'> = {
+    name: '', category: 'Mantenimiento', durationMin: 60, price: 120000,
+    description: '', warrantyDuration: 3, warrantyUnit: 'meses',
+  };
+  const [newService, setNewService] = useState(emptyService);
 
   const categories = [
     'Todas',
@@ -134,6 +138,11 @@ export const ServicesCatalogView: React.FC = () => {
                   <Tag className="w-3.5 h-3.5" />
                   <span className="font-mono text-[11px]">{srv.code}</span>
                 </div>
+                {srv.warrantyDuration && srv.warrantyUnit && (
+                  <div className="flex items-center gap-1.5 text-emerald-700 font-semibold">
+                    <span>Garantía: {srv.warrantyDuration} {srv.warrantyUnit}</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -214,6 +223,31 @@ export const ServicesCatalogView: React.FC = () => {
                 />
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Garantía</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={newService.warrantyDuration || ''}
+                    onChange={(e) => setNewService((s) => ({ ...s, warrantyDuration: e.target.value ? Number(e.target.value) : undefined }))}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-gray-700 mb-1">Unidad</label>
+                  <select
+                    value={newService.warrantyUnit || 'meses'}
+                    onChange={(e) => setNewService((s) => ({ ...s, warrantyUnit: e.target.value as ServiceItem['warrantyUnit'] }))}
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white"
+                  >
+                    <option value="dias">Días</option>
+                    <option value="meses">Meses</option>
+                    <option value="anios">Años</option>
+                  </select>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-bold text-gray-700 mb-1">Descripción de las operaciones</label>
                 <textarea
@@ -238,7 +272,7 @@ export const ServicesCatalogView: React.FC = () => {
                   if (!newService.name.trim()) return;
                   await createService(newService);
                   setShowAddModal(false);
-                  setNewService({ name: '', category: 'Mantenimiento', durationMin: 60, price: 120000, description: '' });
+                  setNewService(emptyService);
                 }}
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700"
               >

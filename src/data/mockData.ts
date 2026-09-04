@@ -3,12 +3,21 @@ import {
   ProductItem,
   Appointment,
   AttendanceRecord,
+  Employee,
   ServiceItem,
   ActaTecnica,
   Invoice,
   ActivityLog,
   WarrantyRecord,
 } from '../types';
+
+export const INITIAL_EMPLOYEES: Employee[] = [
+  { id: 'EMP-DEMO-001', name: 'Marcos', lastName: 'Silva', email: 'marcos.silva@demo.motopro.co', phone: '+57 300 555 0101', document: 'DEMO-EMP-001', role: 'Técnico mecánico principal', branchId: 'demo-1', branch: 'Sede Bogotá (Calle 80 - Principal)', hireDate: '2024-01-15', isActive: true },
+  { id: 'EMP-DEMO-002', name: 'David', lastName: 'Morales', email: 'david.morales@demo.motopro.co', phone: '+57 300 555 0102', document: 'DEMO-EMP-002', role: 'Técnico mecánico', branchId: 'demo-1', branch: 'Sede Bogotá (Calle 80 - Principal)', hireDate: '2024-03-04', isActive: true },
+  { id: 'EMP-DEMO-003', name: 'Carlos Arturo', lastName: 'Ruiz', email: 'carlos.ruiz@demo.motopro.co', phone: '+57 300 555 0103', document: 'DEMO-EMP-003', role: 'Electricista e inyección', branchId: 'demo-2', branch: 'Sede Bogotá (7 de Agosto)', hireDate: '2023-08-21', isActive: true },
+  { id: 'EMP-DEMO-004', name: 'Roberto', lastName: 'Gómez', email: 'roberto.gomez@demo.motopro.co', phone: '+57 300 555 0104', document: 'DEMO-EMP-004', role: 'Especialista en neumáticos', branchId: 'demo-2', branch: 'Sede Bogotá (7 de Agosto)', hireDate: '2024-06-10', isActive: true },
+  { id: 'EMP-DEMO-005', name: 'Natalia', lastName: 'Rojas', email: 'natalia.rojas@demo.motopro.co', phone: '+57 300 555 0105', document: 'DEMO-EMP-005', role: 'Asesora de servicio', branchId: 'demo-3', branch: 'Sede Medellín (El Poblado)', hireDate: '2025-02-03', isActive: true },
+];
 
 export const INITIAL_BRANCHES = [
   'Sede Bogotá (Calle 80 - Principal)',
