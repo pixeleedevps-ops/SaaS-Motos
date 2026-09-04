@@ -8,6 +8,7 @@ import { ToastContainer } from './components/common/ToastContainer';
 // Views
 import { DashboardView } from './components/dashboard/DashboardView';
 import { InventoryView } from './components/inventory/InventoryView';
+import { MoveInventoryView } from './components/inventory/MoveInventoryView';
 import { AttendanceView } from './components/attendance/AttendanceView';
 import { CustomersView } from './components/customers/CustomersView';
 import { VehiclesView } from './components/vehicles/VehiclesView';
@@ -38,7 +39,7 @@ const MainContent: React.FC = () => {
       case 'vehicles':
         return <VehiclesView />;
       case 'move-inventory':
-        return <InventoryView />;
+        return <MoveInventoryView />;
       case 'appointments':
         return <AppointmentsView />;
       case 'services':

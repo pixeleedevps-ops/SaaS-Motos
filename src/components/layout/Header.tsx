@@ -45,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   const viewTitles: Record<string, string> = {
     dashboard: 'Panel General',
     inventory: 'Inventario & Recambios',
+    'move-inventory': 'Mover inventario',
     attendance: 'Control de Asistencia',
     customers: 'Clientes & Flota',
     appointments: 'Agendamiento de Citas',
@@ -310,4 +311,3 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
     </header>
   );
 };
-
