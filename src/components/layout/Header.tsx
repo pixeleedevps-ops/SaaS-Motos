@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   AlertTriangle,
   Menu,
+  LockKeyhole,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { AppNotification } from '../../types';
@@ -21,11 +22,6 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from '../../services/notifications';
-import {
-  enablePushNotifications,
-  isFirebasePublicConfigReady,
-  listenForForegroundPush,
-} from '../../services/pushNotifications';
 
 interface HeaderProps {
   onOpenMobileMenu: () => void;
@@ -37,6 +33,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
     selectedBranch,
     setSelectedBranch,
     branches,
+    currentUserRole,
+    canSelectBranch,
+    isMechanic,
     navigateTo,
     activityLogs,
     products,
@@ -52,6 +51,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [pushSetupMessage, setPushSetupMessage] = useState('');
   const [enablingPush, setEnablingPush] = useState(false);
+  const firebasePublicConfigReady = Boolean(
+    import.meta.env.VITE_FIREBASE_API_KEY
+    && import.meta.env.VITE_FIREBASE_PROJECT_ID
+    && import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID
+    && import.meta.env.VITE_FIREBASE_APP_ID
+    && import.meta.env.VITE_FIREBASE_VAPID_KEY,
+  );
 
   const lowStockCount = products.filter((p) => p.currentStock <= p.minStock).length;
   const todayAppointments = appointments.filter((a) => a.date.includes('Hoy')).length;
@@ -75,14 +81,15 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
 
   useEffect(() => {
     let unsubscribe = () => undefined;
-    void listenForForegroundPush(() => {
-      void refreshNotifications();
-    }).then((listener) => { unsubscribe = listener; });
+    void import('../../services/pushNotifications').then(({ listenForForegroundPush }) => (
+      listenForForegroundPush(() => { void refreshNotifications(); })
+    )).then((listener) => { unsubscribe = listener; });
     return () => unsubscribe();
   }, []);
 
   const activatePush = async () => {
     setEnablingPush(true);
+    const { enablePushNotifications } = await import('../../services/pushNotifications');
     const result = await enablePushNotifications();
     setPushSetupMessage('message' in result ? result.message : 'Notificaciones activadas en este dispositivo.');
     setEnablingPush(false);
@@ -161,9 +168,11 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
           <h1 className="text-base sm:text-lg font-bold text-slate-800 tracking-tight">
             {viewTitles[currentView] || 'Panel de Taller'}
           </h1>
-          <span className="hidden sm:inline-flex bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200 uppercase tracking-wider">
-            {selectedBranch.toUpperCase()}
-          </span>
+          {currentUserRole !== 'cliente' && (
+            <span className="hidden sm:inline-flex bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-0.5 rounded border border-slate-200 uppercase tracking-wider">
+              {isMechanic ? 'MIS CITAS ASIGNADAS' : `VIENDO: ${(selectedBranch || 'SIN SEDE ASIGNADA').toUpperCase()}`}
+            </span>
+          )}
         </div>
       </div>
 
@@ -186,22 +195,27 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
         </div>
 
         {/* Branch Selector Pill */}
+        {currentUserRole !== 'cliente' && !isMechanic && (
         <div className="relative">
           <button
             id="branch-selector-btn"
+            type="button"
+            disabled={!canSelectBranch}
             onClick={() => {
+              if (!canSelectBranch) return;
               setShowBranchSelect(!showBranchSelect);
               setShowQuickMenu(false);
               setShowNotifications(false);
             }}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 transition-colors disabled:cursor-default disabled:hover:bg-slate-50"
+            aria-label={canSelectBranch ? 'Cambiar sede activa' : 'Sede asignada'}
           >
             <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
             <span className="hidden sm:inline max-w-[120px] truncate">{selectedBranch}</span>
-            <ChevronDown className="w-3 h-3 text-slate-400" />
+            {canSelectBranch ? <ChevronDown className="w-3 h-3 text-slate-400" /> : <LockKeyhole className="w-3 h-3 text-slate-400" />}
           </button>
 
-          {showBranchSelect && (
+          {canSelectBranch && showBranchSelect && (
             <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in slide-in-from-top-2">
               <div className="px-3 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                 Sede Activa del Taller
@@ -224,8 +238,10 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             </div>
           )}
         </div>
+        )}
 
         {/* Quick Action Button */}
+        {!isMechanic && currentUserRole !== 'cliente' && (
         <div className="relative">
           <button
             id="header-quick-action-btn"
@@ -296,6 +312,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             </div>
           )}
         </div>
+        )}
 
         {/* Notifications Button & Popover */}
         <div className="relative">
@@ -330,13 +347,13 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
                 </p>
                 <button
                   type="button"
-                  disabled={enablingPush || !isFirebasePublicConfigReady()}
+                  disabled={enablingPush || !firebasePublicConfigReady}
                   onClick={() => void activatePush()}
                   className="mt-2 rounded-lg bg-indigo-600 px-2.5 py-1.5 text-[10px] font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {enablingPush ? 'Activando…' : 'Activar notificaciones'}
                 </button>
-                {!isFirebasePublicConfigReady() && (
+                {!firebasePublicConfigReady && (
                   <p className="mt-1.5 text-[10px] text-indigo-700">Pendiente de configuración pública de Firebase.</p>
                 )}
                 {pushSetupMessage && <p className="mt-1.5 text-[10px] text-indigo-700">{pushSetupMessage}</p>}

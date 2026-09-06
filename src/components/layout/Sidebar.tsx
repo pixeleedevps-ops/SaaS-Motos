@@ -27,7 +27,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
-  const { currentView, navigateTo, appointments, products, warranties } = useApp();
+  const { currentView, navigateTo, appointments, products, warranties, currentUserRole } = useApp();
 
   const lowStockCount = products.filter((p) => p.currentStock <= p.minStock).length;
   const pendingAptsCount = appointments.filter((a) => a.status === 'Pendiente' || a.status === 'En Proceso').length;
@@ -109,6 +109,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     },
   ];
 
+  const allowedForRole = (item: NavItem) => {
+    if (item.id === 'vehicles') return currentUserRole === 'admin' || currentUserRole === 'mecanico';
+    if (currentUserRole === 'mecanico') return ['dashboard', 'appointments', 'actas', 'vehicles'].includes(item.id);
+    if (currentUserRole === 'cliente') return ['dashboard', 'appointments', 'warranties'].includes(item.id);
+    return true;
+  };
+  const visibleSections = sections
+    .map((section) => ({ ...section, items: section.items.filter(allowedForRole) }))
+    .filter((section) => section.items.length > 0);
+
   return (
     <>
       {/* Mobile overlay backdrop */}
@@ -160,7 +170,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
         {/* Navigation links */}
         <nav className="flex-1 overflow-y-auto px-4 py-4 space-y-5 custom-scrollbar">
-          {sections.map((sec, idx) => (
+          {visibleSections.map((sec, idx) => (
             <div key={idx} className="space-y-1">
               <p className="px-3 text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1.5">
                 {sec.title}

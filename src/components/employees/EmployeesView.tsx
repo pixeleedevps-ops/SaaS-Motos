@@ -9,7 +9,7 @@ const emptyEmployee = (branch: string): Omit<Employee, 'id' | 'userId'> => ({
 });
 
 export const EmployeesView: React.FC = () => {
-  const { employees, branches, selectedBranch, currentUserRole, createEmployee, updateEmployee, toggleEmployeeStatus } = useApp();
+  const { employees, branchOptions, selectedBranch, currentUserRole, createEmployee, updateEmployee, toggleEmployeeStatus } = useApp();
   const [search, setSearch] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Omit<Employee, 'id' | 'userId'>>(emptyEmployee(selectedBranch));
@@ -24,7 +24,7 @@ export const EmployeesView: React.FC = () => {
 
   const openCreate = () => {
     setEditingId(null);
-    setDraft(emptyEmployee(branches.includes(selectedBranch) ? selectedBranch : branches[0] || ''));
+    setDraft(emptyEmployee(branchOptions.some((branch) => branch.name === selectedBranch) ? selectedBranch : branchOptions[0]?.name || ''));
     setShowModal(true);
   };
 
@@ -106,7 +106,7 @@ export const EmployeesView: React.FC = () => {
               <label className="font-bold text-gray-700">Nombre *<input required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>
               <label className="font-bold text-gray-700">Apellido<input value={draft.lastName} onChange={(event) => setDraft({ ...draft, lastName: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>
               <label className="font-bold text-gray-700">Cargo *<input required value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>
-              <label className="font-bold text-gray-700">Sede *<select required value={draft.branch} onChange={(event) => setDraft({ ...draft, branch: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 font-normal">{branches.map((branch) => <option key={branch}>{branch}</option>)}</select></label>
+              <label className="font-bold text-gray-700">Sede *<select required value={draft.branch} disabled={selectedBranch !== 'Todas las sedes'} onChange={(event) => setDraft({ ...draft, branch: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 bg-white px-3 py-2 font-normal disabled:bg-gray-100">{branchOptions.map((branch) => <option key={branch.id} value={branch.name}>{branch.name}</option>)}</select></label>
               <label className="font-bold text-gray-700">Correo<input type="email" value={draft.email} onChange={(event) => setDraft({ ...draft, email: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>
               <label className="font-bold text-gray-700">Celular<input value={draft.phone} onChange={(event) => setDraft({ ...draft, phone: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>
               <label className="font-bold text-gray-700">Documento<input value={draft.document} onChange={(event) => setDraft({ ...draft, document: event.target.value })} className="mt-1 w-full rounded-xl border border-gray-300 px-3 py-2 font-normal" /></label>

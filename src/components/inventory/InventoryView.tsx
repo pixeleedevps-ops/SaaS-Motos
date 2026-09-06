@@ -22,7 +22,7 @@ export const InventoryView: React.FC = () => {
     createProduct,
     restockProduct,
     selectedBranch,
-    branches,
+    branchOptions,
     productBrands,
     productCategories,
     canManageInventory,
@@ -35,7 +35,7 @@ export const InventoryView: React.FC = () => {
     imageUrl: '',
     brand: productBrands[0]?.name || '',
     category: productCategories[0]?.name || '',
-    branch: branches.includes(selectedBranch) ? selectedBranch : branches[0] || '',
+    branch: branchOptions.some((branch) => branch.name === selectedBranch) ? selectedBranch : branchOptions[0]?.name || '',
     isActive: true,
     currentStock: 0,
     minStock: 5,
@@ -398,11 +398,12 @@ export const InventoryView: React.FC = () => {
                   <select
                     required
                     value={newProd.branch}
+                    disabled={selectedBranch !== 'Todas las sedes'}
                     onChange={(e) => setNewProd({ ...newProd, branch: e.target.value, location: e.target.value })}
-                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-hidden disabled:bg-gray-100"
                   >
                     <option value="" disabled>Seleccionar sede</option>
-                    {branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                    {branchOptions.map((branch) => <option key={branch.id} value={branch.name}>{branch.name}</option>)}
                   </select>
                 </div>
               </div>

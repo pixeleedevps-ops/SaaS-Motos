@@ -4,18 +4,13 @@ import { useApp } from '../../context/AppContext';
 import { formatCOP } from '../../utils/formatters';
 
 export const MoveInventoryView: React.FC = () => {
-  const { products, branches, currentUserRole, canManageInventory, moveProductToBranch } = useApp();
+  const { products, branchOptions, currentUserRole, canManageInventory, moveProductToBranch } = useApp();
   const [searchQuery, setSearchQuery] = useState('');
   const [savingProductId, setSavingProductId] = useState<string | null>(null);
 
   const productRows = useMemo(() => {
-    const uniqueProducts = new Map<string, (typeof products)[number]>();
-    products.forEach((product) => {
-      const productId = product.productId || product.id;
-      if (!uniqueProducts.has(productId)) uniqueProducts.set(productId, product);
-    });
     const query = searchQuery.trim().toLocaleLowerCase('es');
-    return [...uniqueProducts.values()].filter((product) =>
+    return products.filter((product) =>
       !query || product.name.toLocaleLowerCase('es').includes(query) || product.category.toLocaleLowerCase('es').includes(query)
     );
   }, [products, searchQuery]);
@@ -69,7 +64,7 @@ export const MoveInventoryView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {productRows.map((product) => {
-                const productId = product.productId || product.id;
+                const productId = product.id;
                 const isSaving = savingProductId === productId;
                 return (
                   <tr key={productId} className="transition-colors hover:bg-gray-50/60">
@@ -88,8 +83,8 @@ export const MoveInventoryView: React.FC = () => {
                           onChange={(event) => void handleLocationChange(productId, event.target.value)}
                           className="w-full appearance-none rounded-xl border border-gray-300 bg-white py-2 pl-9 pr-8 font-semibold text-gray-800 outline-hidden focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
                         >
-                          {!branches.includes(product.branch) && <option value={product.branch}>{product.branch}</option>}
-                          {branches.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                          {!branchOptions.some((branch) => branch.name === product.branch) && <option value={product.branch}>{product.branch}</option>}
+                          {branchOptions.map((branch) => <option key={branch.id} value={branch.name}>{branch.name}</option>)}
                         </select>
                         {isSaving && <span className="absolute right-8 top-1/2 -translate-y-1/2 text-[10px] font-bold text-indigo-600">Guardando…</span>}
                       </div>

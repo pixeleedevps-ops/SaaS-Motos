@@ -55,10 +55,13 @@ export interface Appointment {
   customerId: string;
   customerName: string;
   customerPhone: string;
+  customerEmail?: string;
   customerDocument?: string;
   customerAvatar?: string;
   motorcyclePlate: string;
   motorcycleModel: string;
+  motorcycleBrand?: string;
+  motorcycleYear?: number;
   motorcycleId?: string;
   serviceId: string;
   serviceName: string;
@@ -69,6 +72,7 @@ export interface Appointment {
   date: string;
   time: string;
   status: 'Pendiente' | 'Confirmada' | 'En Proceso' | 'Completada' | 'Cancelada';
+  stateVersion?: number;
   estimatedDurationMin: number;
   notes?: string;
   price: number;
@@ -78,6 +82,8 @@ export interface Appointment {
 export interface ProductItem {
   id: string;
   productId?: string;
+  variantId?: string;
+  inventoryId?: string;
   sku: string;
   name: string;
   brand: string;
@@ -96,6 +102,40 @@ export interface ProductItem {
   lastRestocked: string;
   warrantyDuration?: number;
   warrantyUnit?: 'dias' | 'meses' | 'anios';
+  productType?: 'simple' | 'variable';
+  variantLabel?: string;
+  attributes?: Array<{ attribute: string; value: string }>;
+}
+
+export interface ProductVariantInput {
+  key: string;
+  label: string;
+  sku: string;
+  additionalPrice: number;
+  stock: number;
+  minStock: number;
+  isActive: boolean;
+  valueIds: string[];
+}
+
+export interface ProductCreationInput {
+  kind: 'simple' | 'variable';
+  name: string;
+  description?: string;
+  imageUrl?: string;
+  baseSku: string;
+  brandId: string;
+  brandName: string;
+  categoryId: string;
+  categoryName: string;
+  branchId: string;
+  branchName: string;
+  costPrice: number;
+  salePrice: number;
+  warrantyDuration?: number;
+  warrantyUnit?: 'dias' | 'meses' | 'anios';
+  isActive: boolean;
+  variants: ProductVariantInput[];
 }
 
 export interface ServiceItem {
@@ -196,6 +236,7 @@ export interface ActaTecnica {
 export interface InvoiceItem {
   id: string;
   referenceId?: string;
+  appointmentId?: string;
   description: string;
   sku?: string;
   type: 'product' | 'service';
@@ -218,6 +259,7 @@ export interface Invoice {
   motorcycleModel?: string;
   branch: string;
   issueDate: string;
+  issuedAt?: string;
   dueDate: string;
   employeeName: string;
   items: InvoiceItem[];
@@ -282,6 +324,8 @@ export interface WarrantyRecord {
   
   // Sede / Branch
   branch: string;
+  branchId?: string;
+  appointmentId?: string;
   
   // Dates & Duration
   purchaseDate: string; // Fecha de compra

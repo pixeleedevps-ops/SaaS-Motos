@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Calendar,
   DollarSign,
@@ -24,12 +24,14 @@ export const DashboardView: React.FC = () => {
     appointments,
     invoices,
     attendance,
+    employees,
     products,
     activityLogs,
     navigateTo,
     restockProduct,
     updateAppointmentStatus,
     setSelectedAppointment,
+    currentUserRole,
   } = useApp();
 
   const [selectedPeriod, setSelectedPeriod] = useState<'semana' | 'mes' | 'año'>('semana');
@@ -37,23 +39,32 @@ export const DashboardView: React.FC = () => {
   const [restockAmount, setRestockAmount] = useState<number>(10);
 
   // Computed metrics
-  const todayApts = appointments.filter((a) => a.date.includes('Hoy'));
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayApts = appointments.filter((appointment) => appointment.scheduledAt?.slice(0, 10) === todayKey);
   const todayRevenue = invoices.reduce((acc, inv) => acc + inv.total, 0);
   const activeEmployees = attendance.filter((a) => a.status === 'En Turno').length;
   const lowStockItems = products.filter((p) => p.currentStock <= p.minStock);
 
-  // Weekly appointments data for the interactive chart
-  const weeklyData = [
-    { day: 'Lun', count: 8, revenue: 1850000 },
-    { day: 'Mar', count: 12, revenue: 2940000 },
-    { day: 'Mié', count: 15, revenue: 3820000 },
-    { day: 'Jue', count: 11, revenue: 2650000 },
-    { day: 'Vie', count: 18, revenue: 4720000 },
-    { day: 'Sáb', count: 14, revenue: 3590000 },
-    { day: 'Dom', count: 4, revenue: 980000 },
-  ];
+  const canCreateOperationalRecords = ['admin', 'empleado', 'vendedor'].includes(currentUserRole || '');
+  const weeklyData = useMemo(() => {
+    const now = new Date();
+    const monday = new Date(now);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    return Array.from({ length: 7 }, (_, index) => {
+      const day = new Date(monday);
+      day.setDate(monday.getDate() + index);
+      const key = day.toISOString().slice(0, 10);
+      return {
+        day: day.toLocaleDateString('es-CO', { weekday: 'short' }).replace('.', ''),
+        count: appointments.filter((appointment) => appointment.scheduledAt?.slice(0, 10) === key).length,
+        isToday: key === todayKey,
+      };
+    });
+  }, [appointments, todayKey]);
 
-  const maxWeeklyCount = Math.max(...weeklyData.map((d) => d.count));
+  const maxWeeklyCount = Math.max(1, ...weeklyData.map((d) => d.count));
+  const weeklyAverage = weeklyData.reduce((total, day) => total + day.count, 0) / weeklyData.length;
 
   const handleQuickRestock = () => {
     if (restockModalItem) {
@@ -77,7 +88,7 @@ export const DashboardView: React.FC = () => {
             Monitorea el flujo de elevadores, recambios críticos, citas y facturación diaria.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        {canCreateOperationalRecords && <div className="flex items-center gap-3">
           <button
             id="dash-new-apt-btn"
             onClick={() => navigateTo('appointments')}
@@ -94,7 +105,7 @@ export const DashboardView: React.FC = () => {
             <DollarSign className="w-4 h-4" />
             Facturar TPV
           </button>
-        </div>
+        </div>}
       </div>
 
       {/* 4 KPI Metric Cards */}
@@ -154,7 +165,7 @@ export const DashboardView: React.FC = () => {
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-2xl font-bold text-slate-800">{activeEmployees}</span>
-            <span className="text-xs text-slate-500 font-medium">de {attendance.length} plantilla</span>
+            <span className="text-xs text-slate-500 font-medium">de {employees.length} plantilla</span>
           </div>
           <div className="mt-2 flex items-center gap-1 text-[11px] text-blue-600 font-semibold">
             <Clock className="w-3.5 h-3.5" />
@@ -219,12 +230,12 @@ export const DashboardView: React.FC = () => {
             <div className="h-48 flex items-end justify-between gap-2 sm:gap-4 px-2">
               {weeklyData.map((item, idx) => {
                 const heightPercent = Math.round((item.count / maxWeeklyCount) * 100);
-                const isToday = item.day === 'Mié';
+                const isToday = item.isToday;
                 return (
                   <div key={idx} className="flex-1 flex flex-col items-center gap-2 group relative">
                     {/* Tooltip */}
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -top-12 bg-slate-900 text-white text-[11px] font-semibold py-1 px-2 rounded shadow-lg pointer-events-none whitespace-nowrap z-10">
-                      {item.count} citas • {formatCOP(item.revenue)}
+                      {item.count} citas
                     </div>
 
                     <div className="w-full bg-slate-100 rounded-t-lg h-full flex items-end p-1">
@@ -263,7 +274,7 @@ export const DashboardView: React.FC = () => {
                 <span>Otros días</span>
               </div>
             </div>
-            <span className="font-semibold text-slate-700">Media: 11.7 citas/día</span>
+            <span className="font-semibold text-slate-700">Media: {weeklyAverage.toFixed(1)} citas/día</span>
           </div>
         </div>
 
@@ -452,6 +463,7 @@ export const DashboardView: React.FC = () => {
                 </div>
               </div>
             ))}
+            {activityLogs.length === 0 && <p className="py-6 text-center text-xs text-slate-500">Sin actividad reciente registrada.</p>}
           </div>
 
           <div className="mt-5 pt-3 border-t border-slate-100">
