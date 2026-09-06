@@ -152,6 +152,7 @@ export const InvoicesView: React.FC = () => {
                       </div>
                       <p className="font-bold text-gray-900 text-xs mt-1">{inv.customerName}</p>
                       <p className="text-[11px] text-gray-600">{inv.motorcycleModel || 'Servicio taller'}</p>
+                      <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-indigo-700"><Building2 className="h-3 w-3" />{inv.branch}</p>
                     </div>
                     <div className="text-right">
                       <span className="font-black text-gray-900 text-sm">{formatCOP(inv.total)}</span>
@@ -174,7 +175,7 @@ export const InvoicesView: React.FC = () => {
                 Visor de Factura Oficial
               </span>
               <div className="flex items-center gap-2">
-                {(currentUserRole === 'admin' || currentUserRole === 'empleado') && (
+                {['admin', 'empleado', 'vendedor'].includes(currentUserRole || '') && (
                   <select
                     aria-label="Cambiar estado de factura"
                     disabled={updatingStatus}

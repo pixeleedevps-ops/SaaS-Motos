@@ -17,43 +17,73 @@ import { Invoice, InvoiceItem } from '../../types';
 import { formatCOP } from '../../utils/formatters';
 
 export const NewInvoiceView: React.FC = () => {
-  const { customers, products, services, createInvoice, navigateTo, selectedBranch } = useApp();
+  const {
+    customers,
+    products,
+    services,
+    appointments,
+    selectedAppointment,
+    createInvoice,
+    navigateTo,
+    selectedBranch,
+    branchOptions,
+    currentUserRole,
+  } = useApp();
 
   const [selectedCustomerId, setSelectedCustomerId] = useState(customers[0]?.id || '');
   const [paymentMethod, setPaymentMethod] = useState<'Tarjeta' | 'Transferencia' | 'Efectivo' | 'Financiación' | 'Nequi / Daviplata'>('Nequi / Daviplata');
   const [invoiceStatus, setInvoiceStatus] = useState<Invoice['status']>('Pagada');
   const [invoiceNotes, setInvoiceNotes] = useState('Garantía de 6 meses en mano de obra y repuestos originales según normativa colombiana.');
   const [submitting, setSubmitting] = useState(false);
+  const [invoiceBranch, setInvoiceBranch] = useState(() => branchOptions.some((branch) => branch.name === selectedBranch) ? selectedBranch : branchOptions[0]?.name || '');
+  const [sourceAppointmentId, setSourceAppointmentId] = useState('');
+  const [items, setItems] = useState<InvoiceItem[]>([]);
+  const canChooseInvoiceBranch = currentUserRole === 'admin' && selectedBranch === 'Todas las sedes';
 
   useEffect(() => {
     if (!selectedCustomerId && customers[0]) setSelectedCustomerId(customers[0].id);
   }, [customers, selectedCustomerId]);
 
-  // Items in current draft invoice
-  const [items, setItems] = useState<InvoiceItem[]>([
-    {
-      id: '1',
-      description: 'Sincronización Electrónica & Inyección',
-      type: 'service',
-      quantity: 1,
-      unitPrice: 180000,
-      discountPercent: 0,
-      total: 180000,
-    },
-    {
-      id: '2',
-      description: 'Aceite Sintético Motul 7100 4T 10W-40 (4L)',
-      type: 'product',
-      sku: 'MOT-7100-10W40',
-      quantity: 1,
-      unitPrice: 240000,
-      discountPercent: 5,
-      total: 228000,
-    },
-  ]);
+  useEffect(() => {
+    if (branchOptions.some((branch) => branch.name === selectedBranch)) setInvoiceBranch(selectedBranch);
+    else if (!branchOptions.some((branch) => branch.name === invoiceBranch)) setInvoiceBranch(branchOptions[0]?.name || '');
+  }, [branchOptions, invoiceBranch, selectedBranch]);
+
+  useEffect(() => {
+    if (!selectedAppointment || selectedAppointment.status !== 'Completada') return;
+
+    setSelectedCustomerId(selectedAppointment.customerId);
+    setInvoiceBranch(selectedAppointment.branch);
+    setSourceAppointmentId(selectedAppointment.id);
+    setItems((current) => current.some((item) => item.appointmentId === selectedAppointment.id)
+      ? current
+      : [...current, {
+        id: `appointment-${selectedAppointment.id}`,
+        referenceId: selectedAppointment.serviceId,
+        appointmentId: selectedAppointment.id,
+        description: selectedAppointment.serviceName,
+        type: 'service',
+        quantity: 1,
+        unitPrice: selectedAppointment.price,
+        discountPercent: 0,
+        total: selectedAppointment.price,
+      }]);
+  }, [selectedAppointment?.id]);
 
   const activeCustomer = customers.find((c) => c.id === selectedCustomerId) || customers[0];
   const activeMoto = activeCustomer?.motorcycles[0];
+  const eligibleAppointments = appointments.filter((appointment) =>
+    appointment.status === 'Completada'
+    && appointment.customerId === activeCustomer?.id
+    && appointment.branch === invoiceBranch
+  );
+  const sourceAppointment = eligibleAppointments.find((appointment) => appointment.id === sourceAppointmentId);
+
+  useEffect(() => {
+    if (sourceAppointmentId && !eligibleAppointments.some((appointment) => appointment.id === sourceAppointmentId)) {
+      setSourceAppointmentId('');
+    }
+  }, [sourceAppointmentId, selectedCustomerId, invoiceBranch, appointments]);
 
   const handleAddItemFromService = (serviceId: string) => {
     const srv = services.find((s) => s.id === serviceId);
@@ -61,6 +91,7 @@ export const NewInvoiceView: React.FC = () => {
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
       referenceId: srv.id,
+      appointmentId: sourceAppointment?.serviceId === srv.id ? sourceAppointment.id : undefined,
       description: srv.name,
       type: 'service',
       quantity: 1,
@@ -76,7 +107,7 @@ export const NewInvoiceView: React.FC = () => {
     if (!prod) return;
     const newItem: InvoiceItem = {
       id: Date.now().toString(),
-      referenceId: prod.productId && prod.productId !== prod.id ? prod.id : undefined,
+      referenceId: prod.variantId,
       description: prod.name,
       type: 'product',
       quantity: 1,
@@ -122,8 +153,9 @@ export const NewInvoiceView: React.FC = () => {
       customerAddress: `${activeCustomer.address}, ${activeCustomer.city}`,
       motorcyclePlate: activeMoto?.licensePlate || 'UWE-48E',
       motorcycleModel: activeMoto ? `${activeMoto.brand} ${activeMoto.model}` : 'Yamaha MT-07',
-      branch: selectedBranch,
+      branch: invoiceBranch,
       issueDate: new Date().toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }),
+      issuedAt: new Date().toISOString().slice(0, 10),
       dueDate: new Date(Date.now() + 15 * 86400000).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }),
       employeeName: 'Carlos Mendoza (Caja Principal)',
       items,
@@ -160,6 +192,20 @@ export const NewInvoiceView: React.FC = () => {
         </div>
       </div>
 
+      <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+        <label className="block text-xs font-bold text-indigo-900">Sede que emite la factura</label>
+        <select
+          value={invoiceBranch}
+          onChange={(event) => setInvoiceBranch(event.target.value)}
+          disabled={!canChooseInvoiceBranch}
+          required
+          className="mt-2 w-full max-w-sm rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold disabled:bg-slate-100"
+        >
+          <option value="" disabled>Seleccionar sede o bodega</option>
+          {branchOptions.map((branch) => <option key={branch.id} value={branch.name}>{branch.name}</option>)}
+        </select>
+      </div>
+
       <form onSubmit={handleSubmitInvoice} className="space-y-6">
         
         {/* Customer and Vehicle selection banner */}
@@ -167,7 +213,7 @@ export const NewInvoiceView: React.FC = () => {
           <h2 className="text-xs font-bold text-gray-600 uppercase tracking-wider mb-4">
             Datos del Cliente & Vehículo
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4 text-xs">
             <div>
               <label className="block font-bold text-gray-700 mb-1">Cliente *</label>
               <select
@@ -191,6 +237,23 @@ export const NewInvoiceView: React.FC = () => {
                 value={activeMoto ? `${activeMoto.brand} ${activeMoto.model} (${activeMoto.licensePlate})` : 'Sin moto asignada'}
                 className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-gray-50 text-gray-700 font-medium"
               />
+            </div>
+
+            <div>
+              <label className="block font-bold text-gray-700 mb-1">Cita de origen</label>
+              <select
+                value={sourceAppointmentId}
+                onChange={(event) => setSourceAppointmentId(event.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+              >
+                <option value="">Sin cita vinculada</option>
+                {eligibleAppointments.map((appointment) => (
+                  <option key={appointment.id} value={appointment.id}>
+                    {appointment.code} · {appointment.serviceName}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] leading-4 text-slate-500">Solo citas completadas del cliente y la sede.</p>
             </div>
 
             <div>
@@ -271,7 +334,7 @@ export const NewInvoiceView: React.FC = () => {
               className="w-full px-3 py-2 rounded-xl border border-gray-300 bg-white text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
             >
               <option value="" disabled>Selecciona un producto o recambio...</option>
-              {products.map((p) => (
+              {products.filter((product) => product.branch === invoiceBranch).map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name} ({p.currentStock} disponibles) — {formatCOP(p.salePrice)}
                 </option>

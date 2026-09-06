@@ -89,6 +89,7 @@ export type Database = {
           estado: Database["public"]["Enums"]["estado_cita"]
           estado_version: number
           fecha_hora: string
+          fecha_proxima_revision: string | null
           id: string
           moto_id: string | null
           notas: string | null
@@ -103,6 +104,7 @@ export type Database = {
           estado?: Database["public"]["Enums"]["estado_cita"]
           estado_version?: number
           fecha_hora: string
+          fecha_proxima_revision?: string | null
           id?: string
           moto_id?: string | null
           notas?: string | null
@@ -117,6 +119,7 @@ export type Database = {
           estado?: Database["public"]["Enums"]["estado_cita"]
           estado_version?: number
           fecha_hora?: string
+          fecha_proxima_revision?: string | null
           id?: string
           moto_id?: string | null
           notas?: string | null
@@ -241,6 +244,7 @@ export type Database = {
           cantidad: number
           descuento_porcentaje: number
           factura_id: string
+          fecha_vencimiento_garantia: string | null
           id: string
           nombre_producto: string
           precio_unitario: number
@@ -252,6 +256,7 @@ export type Database = {
           cantidad: number
           descuento_porcentaje?: number
           factura_id: string
+          fecha_vencimiento_garantia?: string | null
           id?: string
           nombre_producto: string
           precio_unitario: number
@@ -263,6 +268,7 @@ export type Database = {
           cantidad?: number
           descuento_porcentaje?: number
           factura_id?: string
+          fecha_vencimiento_garantia?: string | null
           id?: string
           nombre_producto?: string
           precio_unitario?: number
@@ -297,6 +303,7 @@ export type Database = {
       factura_servicios: {
         Row: {
           cantidad: number
+          cita_id: string | null
           descuento_porcentaje: number
           factura_id: string
           id: string
@@ -308,6 +315,7 @@ export type Database = {
         }
         Insert: {
           cantidad?: number
+          cita_id?: string | null
           descuento_porcentaje?: number
           factura_id: string
           id?: string
@@ -319,6 +327,7 @@ export type Database = {
         }
         Update: {
           cantidad?: number
+          cita_id?: string | null
           descuento_porcentaje?: number
           factura_id?: string
           id?: string
@@ -329,6 +338,13 @@ export type Database = {
           subtotal?: number
         }
         Relationships: [
+          {
+            foreignKeyName: "factura_servicios_cita_id_fkey"
+            columns: ["cita_id"]
+            isOneToOne: false
+            referencedRelation: "citas"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "factura_servicios_factura_id_fkey"
             columns: ["factura_id"]
@@ -710,6 +726,7 @@ export type Database = {
       movimientos_inventario: {
         Row: {
           cantidad: number
+          factura_item_id: string | null
           fecha: string
           id: string
           motivo: string | null
@@ -720,6 +737,7 @@ export type Database = {
         }
         Insert: {
           cantidad: number
+          factura_item_id?: string | null
           fecha?: string
           id?: string
           motivo?: string | null
@@ -730,6 +748,7 @@ export type Database = {
         }
         Update: {
           cantidad?: number
+          factura_item_id?: string | null
           fecha?: string
           id?: string
           motivo?: string | null
@@ -739,6 +758,13 @@ export type Database = {
           variante_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "movimientos_inventario_factura_item_id_fkey"
+            columns: ["factura_item_id"]
+            isOneToOne: false
+            referencedRelation: "factura_items"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "movimientos_inventario_sede_id_fkey"
             columns: ["sede_id"]
@@ -1461,6 +1487,56 @@ export type Database = {
       }
     }
     Views: {
+      catalogo_productos_publico: {
+        Row: {
+          activo: boolean | null
+          created_at: string | null
+          descripcion: string | null
+          garantia_duracion: number | null
+          garantia_unidad: string | null
+          id: string | null
+          imagen_url: string | null
+          marca_id: string | null
+          nombre: string | null
+          precio: number | null
+          sede_id: string | null
+          sku_base: string | null
+          tipo_id: string | null
+          updated_at: string | null
+        }
+        Relationships: []
+      }
+      garantias_compras_unificadas: {
+        Row: {
+          cantidad: number | null
+          cita_id: string | null
+          cliente_documento: string | null
+          cliente_email: string | null
+          cliente_id: string | null
+          cliente_nombre: string | null
+          cliente_telefono: string | null
+          codigo_garantia: string | null
+          duracion: number | null
+          factura_id: string | null
+          fecha_garantia: string | null
+          fecha_operacion: string | null
+          garantia_id: string | null
+          id: string | null
+          item_nombre: string | null
+          item_precio: number | null
+          metodo_pago: string | null
+          moto_modelo: string | null
+          moto_placa: string | null
+          numero_factura: string | null
+          origen_id: string | null
+          sede_id: string | null
+          sede_nombre: string | null
+          sku: string | null
+          tipo: string | null
+          unidad: string | null
+        }
+        Relationships: []
+      }
       inventario_detallado: {
         Row: {
           id: string | null
@@ -1490,6 +1566,18 @@ export type Database = {
           id: string
           nombre: string
           telefono: string
+        }[]
+      }
+      cambiar_estado_cita: {
+        Args: {
+          p_cita_id: string
+          p_estado: Database["public"]["Enums"]["estado_cita"]
+          p_estado_version: number
+        }
+        Returns: {
+          estado: Database["public"]["Enums"]["estado_cita"]
+          estado_version: number
+          id: string
         }[]
       }
       claim_push_notification: {
@@ -1566,9 +1654,49 @@ export type Database = {
         }
         Returns: Json
       }
+      empleado_actual_id: { Args: never; Returns: string }
       fecha_fin_garantia: {
         Args: { p_duracion: number; p_fecha: string; p_unidad: string }
         Returns: string
+      }
+      inventario_paginado: {
+        Args: {
+          p_limit?: number
+          p_offset?: number
+          p_sede_id?: string | null
+        }
+        Returns: {
+          categoria_nombre: string | null
+          costo: number
+          garantia_duracion: number | null
+          garantia_unidad: string | null
+          imagen_url: string | null
+          inventario_id: string
+          marca_nombre: string | null
+          precio: number
+          precio_adicional: number
+          producto_activo: boolean
+          producto_descripcion: string | null
+          producto_id: string
+          producto_nombre: string
+          sede_id: string
+          sede_nombre: string
+          sede_tipo: Database["public"]["Enums"]["tipo_ubicacion"]
+          sku_base: string | null
+          stock: number
+          stock_minimo: number
+          total_filas: number
+          variante_activa: boolean
+          variante_id: string
+          variante_sku: string | null
+        }[]
+      }
+      motos_cliente_para_agendamiento: {
+        Args: { p_cliente_id: string }
+        Returns: {
+          id: string
+          placa: string | null
+        }[]
       }
       mover_producto_sede: {
         Args: { p_producto_id: string; p_sede_destino_id: string }
@@ -1588,11 +1716,53 @@ export type Database = {
         }
         Returns: string
       }
+      reagendar_cita: {
+        Args: {
+          p_cita_id: string
+          p_empleado_id: string
+          p_fecha_hora: string
+        }
+        Returns: {
+          empleado_id: string
+          fecha_hora: string
+          id: string
+        }[]
+      }
+      registrar_asistencia: {
+        Args: {
+          p_empleado_id?: string | null
+          p_tipo: string
+        }
+        Returns: {
+          empleado_id: string
+          fecha: string
+          hora_entrada: string
+          hora_salida: string | null
+          id: string
+          sede_id: string
+        }[]
+      }
+      reporte_erp: {
+        Args: {
+          p_desde: string
+          p_hasta: string
+          p_sede_id?: string | null
+        }
+        Returns: Json
+      }
       rol_actual: {
         Args: never
         Returns: Database["public"]["Enums"]["rol_usuario"]
       }
       sede_actual: { Args: never; Returns: string }
+      trasladar_producto_entre_sedes: {
+        Args: {
+          p_producto_id: string
+          p_sede_destino_id: string
+          p_sede_origen_id: string
+        }
+        Returns: Json
+      }
       verify_push_webhook_secret: {
         Args: { p_secret: string }
         Returns: boolean
@@ -1605,7 +1775,7 @@ export type Database = {
         | "en_proceso"
         | "completada"
         | "cancelada"
-      rol_usuario: "admin" | "empleado" | "cliente"
+      rol_usuario: "admin" | "empleado" | "vendedor" | "mecanico" | "cliente"
       tipo_movimiento: "entrada" | "salida"
       tipo_servicio:
         | "mantenimiento"
@@ -1748,7 +1918,7 @@ export const Constants = {
         "completada",
         "cancelada",
       ],
-      rol_usuario: ["admin", "empleado", "cliente"],
+      rol_usuario: ["admin", "empleado", "vendedor", "mecanico", "cliente"],
       tipo_movimiento: ["entrada", "salida"],
       tipo_servicio: [
         "mantenimiento",
@@ -1761,4 +1931,3 @@ export const Constants = {
     },
   },
 } as const
-

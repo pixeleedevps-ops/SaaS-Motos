@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useCallback, useContext, useState, useEffect } from 'react';
 import {
   ViewMode,
   Customer,
@@ -13,6 +13,7 @@ import {
   Motorcycle,
   WarrantyRecord,
   WarrantyClaim,
+  ProductCreationInput,
 } from '../types';
 import {
   INITIAL_BRANCHES,
@@ -47,12 +48,22 @@ const toProductCategory = (value?: string): ProductItem['category'] => {
   return 'Accesorios';
 };
 
-export type AppUserRole = 'admin' | 'empleado' | 'cliente' | null;
+export type AppUserRole = 'admin' | 'empleado' | 'vendedor' | 'mecanico' | 'cliente' | null;
 
 export interface CatalogOption {
   id: string;
   name: string;
 }
+
+export interface BranchOption extends CatalogOption {
+  type: 'Sede' | 'bodega';
+}
+
+export interface ProductAttributeCatalog extends CatalogOption {
+  values: CatalogOption[];
+}
+
+const ALL_BRANCHES = 'Todas las sedes';
 
 const UNKNOWN_BRANCH = 'Sin ubicación';
 
@@ -114,10 +125,14 @@ interface AppContextType {
   selectedBranch: string;
   setSelectedBranch: (branch: string) => void;
   branches: string[];
+  branchOptions: BranchOption[];
   currentUserRole: AppUserRole;
+  canSelectBranch: boolean;
+  isMechanic: boolean;
   canManageInventory: boolean;
   productBrands: CatalogOption[];
   productCategories: CatalogOption[];
+  productAttributes: ProductAttributeCatalog[];
   
   // Data
   customers: Customer[];
@@ -150,11 +165,18 @@ interface AppContextType {
   removeToast: (id: string) => void;
 
   // Actions
-  recordAttendance: (type: 'checkIn' | 'checkOut', employeeName?: string) => void;
+  recordAttendance: (type: 'checkIn' | 'checkOut', employeeName?: string) => Promise<boolean>;
   updateAppointmentStatus: (id: string, status: Appointment['status']) => Promise<void>;
+  updateAppointmentDetails: (id: string, changes: { scheduledAt: string; technicianId: string; technicianName: string }) => Promise<boolean>;
   createAppointment: (apt: Partial<Appointment>) => Promise<boolean>;
-  restockProduct: (id: string, amount: number) => void;
-  createProduct: (product: Omit<ProductItem, 'id'>) => Promise<boolean>;
+  loadAppointmentsRange: (from: string, to: string) => Promise<void>;
+  restockProduct: (id: string, amount: number) => Promise<boolean>;
+  createProductCatalogOption: (
+    catalog: 'brand' | 'category' | 'attribute' | 'attributeValue',
+    name: string,
+    attributeId?: string,
+  ) => Promise<CatalogOption | null>;
+  createProduct: (product: ProductCreationInput) => Promise<boolean>;
   moveProductToBranch: (productId: string, branch: string) => Promise<boolean>;
   createCustomer: (cust: Partial<Customer> & { password?: string }) => Promise<boolean>;
   updateCustomer: (id: string, cust: Partial<Customer>) => Promise<boolean>;
@@ -182,10 +204,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentView, setCurrentView] = useState<ViewMode>('dashboard');
   const [selectedBranch, setSelectedBranch] = useState<string>('Sede Bogotá (Calle 80 - Principal)');
   const [branches, setBranches] = useState<string[]>(INITIAL_BRANCHES);
-  const [branchOptions, setBranchOptions] = useState<CatalogOption[]>(() => INITIAL_BRANCHES.map((name) => ({ id: name, name })));
+  const [branchOptions, setBranchOptions] = useState<BranchOption[]>(() => INITIAL_BRANCHES.map((name) => ({ id: name, name, type: name.toLowerCase().includes('bodega') ? 'bodega' : 'Sede' })));
   const [currentUserRole, setCurrentUserRole] = useState<AppUserRole>(isSupabaseConfigured ? null : 'admin');
+  const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
+  const isMechanic = currentUserRole === 'mecanico';
+  const canSelectBranch = currentUserRole === 'admin';
   const [productBrands, setProductBrands] = useState<CatalogOption[]>(() => [...new Set(INITIAL_PRODUCTS.map((product) => product.brand))].map((name) => ({ id: name, name })));
   const [productCategories, setProductCategories] = useState<CatalogOption[]>(() => [...new Set(INITIAL_PRODUCTS.map((product) => product.category))].map((name) => ({ id: name, name })));
+  const [productAttributes, setProductAttributes] = useState<ProductAttributeCatalog[]>([]);
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     if (isSupabaseConfigured) return [];
@@ -214,6 +240,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
+    if (isSupabaseConfigured) return [];
     const saved = localStorage.getItem('motopro_attendance');
     return saved ? JSON.parse(saved) : INITIAL_ATTENDANCE;
   });
@@ -225,6 +252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [actas, setActas] = useState<ActaTecnica[]>(() => {
+    if (isSupabaseConfigured) return [];
     const saved = localStorage.getItem('motopro_actas');
     return saved ? JSON.parse(saved) : INITIAL_ACTAS;
   });
@@ -242,6 +270,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() => {
+    if (isSupabaseConfigured) return [];
     const saved = localStorage.getItem('motopro_activity');
     return saved ? JSON.parse(saved) : INITIAL_ACTIVITY_LOGS;
   });
@@ -260,51 +289,142 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isSupabaseConfigured || !supabase) return;
     let active = true;
     const loadRemoteData = async () => {
+      // No conserva filas de la sede anterior mientras se resuelve la nueva
+      // consulta. Así un cambio de contexto nunca mezcla ubicaciones.
+      setProducts([]);
+      setAppointments([]);
+      setAttendance([]);
+      setEmployees([]);
+      setInvoices([]);
+      setWarranties([]);
+      setSelectedAppointment(null);
+      setSelectedInvoice(null);
+      setSelectedWarranty(null);
       const { data: { user } } = await supabase.auth.getUser();
-      const [customersResult, productsResult, productCostsResult, appointmentsResult, branchesResult, servicesResult, attendanceResult, employeesResult, invoicesResult, warrantiesResult, profileResult, brandsResult, categoriesResult] = await Promise.all([
+      const [profileResult, branchesResult, currentEmployeeResult] = await Promise.all([
+        user ? supabase.from('usuarios').select('rol, activo, sede_id').eq('id', user.id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        supabase.from('sedes').select('id, nombre, activo, tipo').eq('activo', true).order('nombre'),
+        user ? supabase.from('empleados').select('id, cargo, sede_id').eq('usuario_id', user.id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+      ]);
+      if (!active) return;
+
+      const rawRole = profileResult.data?.activo !== false ? profileResult.data?.rol as AppUserRole : null;
+      if (user && !profileResult.error && (!profileResult.data || !rawRole)) {
+        console.error('La sesión no tiene un perfil activo en usuarios; se cerrará por seguridad.');
+        await supabase.auth.signOut();
+        return;
+      }
+      const staffTitle = currentEmployeeResult.data?.cargo || '';
+      const mechanicByTitle = rawRole === 'empleado' && /técnic|tecnic|mecánic|mecanic|electric|especialista/i.test(staffTitle);
+      const effectiveRole: AppUserRole = mechanicByTitle ? 'mecanico' : rawRole;
+      const activeLocations: BranchOption[] = (branchesResult.data || []).map((branch) => ({
+        id: branch.id,
+        name: branch.nombre,
+        type: branch.tipo,
+      }));
+      const assignedBranchId = profileResult.data?.sede_id || currentEmployeeResult.data?.sede_id || null;
+      const assignedBranch = activeLocations.find((branch) => branch.id === assignedBranchId);
+      const savedAdminBranch = sessionStorage.getItem('motopro_selected_branch');
+      const validAdminSelection = selectedBranch === ALL_BRANCHES || activeLocations.some((branch) => branch.name === selectedBranch);
+      const effectiveBranch = effectiveRole === 'admin'
+        ? (validAdminSelection ? selectedBranch : (savedAdminBranch === ALL_BRANCHES || activeLocations.some((branch) => branch.name === savedAdminBranch) ? savedAdminBranch! : ALL_BRANCHES))
+        : effectiveRole === 'mecanico'
+          ? (assignedBranch?.name || '')
+          : effectiveRole === 'empleado' || effectiveRole === 'vendedor'
+            ? (assignedBranch?.name || '')
+            : '';
+      const scopeBranchId = effectiveRole === 'admin'
+        ? (effectiveBranch === ALL_BRANCHES ? null : activeLocations.find((branch) => branch.name === effectiveBranch)?.id || null)
+        : effectiveRole === 'empleado' || effectiveRole === 'vendedor'
+          ? assignedBranchId
+          : null;
+
+      setCurrentUserRole(effectiveRole);
+      setBranchOptions(activeLocations);
+      setBranches(effectiveRole === 'admin'
+        ? [ALL_BRANCHES, ...activeLocations.map((branch) => branch.name)]
+        : effectiveRole === 'empleado' || effectiveRole === 'vendedor'
+          ? (assignedBranch ? [assignedBranch.name] : [])
+          : []);
+      if (effectiveBranch !== selectedBranch) setSelectedBranch(effectiveBranch);
+      if (effectiveRole === 'admin' && effectiveBranch) sessionStorage.setItem('motopro_selected_branch', effectiveBranch);
+
+      let inventoryQuery: any = supabase.rpc('inventario_paginado', {
+        p_sede_id: scopeBranchId,
+        p_offset: 0,
+        p_limit: 100,
+      });
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      const monthEnd = new Date(monthStart);
+      monthEnd.setMonth(monthEnd.getMonth() + 1);
+      let appointmentsQuery: any = supabase.from('citas').select('id, cliente_id, empleado_id, servicio_id, sede_id, moto_id, fecha_hora, estado, estado_version, notas, usuarios!citas_cliente_id_fkey(nombre, apellido, telefono, email, documento), servicios(nombre, precio, duracion_estimada_min), sedes(nombre), motos_clientes(marca, modelo, anio, placa), empleados(nombre, apellido, usuarios(nombre, apellido))').gte('fecha_hora', monthStart.toISOString()).lt('fecha_hora', monthEnd.toISOString()).order('fecha_hora', { ascending: false });
+      let attendanceQuery: any = supabase.from('asistencia_empleados').select('id, sede_id, fecha, hora_entrada, hora_salida, empleados(id, nombre, apellido, cargo, usuarios(nombre, apellido), sedes(nombre))').order('fecha', { ascending: false }).limit(100);
+      let employeesQuery: any = supabase.from('empleados').select('id, usuario_id, nombre, apellido, email, telefono, documento, cargo, sede_id, fecha_contratacion, activo, usuarios(nombre, apellido, email, telefono, documento), sedes(id, nombre)').order('nombre');
+      let invoicesQuery: any = supabase.from('facturas').select('id, numero_factura, cliente_id, sede_id, fecha, fecha_vencimiento, subtotal, impuestos, total, descuento_total, metodo_pago, estado, notas, cliente_nombre, cliente_documento, cliente_email, cliente_telefono, cliente_direccion, moto_placa, moto_modelo, empleado_nombre, sedes(nombre), factura_items(id, variante_id, nombre_producto, cantidad, precio_unitario, subtotal, sku, descuento_porcentaje, fecha_vencimiento_garantia), factura_servicios(id, servicio_id, cita_id, nombre_servicio, cantidad, precio_unitario, subtotal, descuento_porcentaje)').order('fecha', { ascending: false }).limit(100);
+      let warrantiesQuery: any = (supabase as any)
+        .from('garantias_compras_unificadas')
+        .select('id, origen_id, tipo, factura_id, numero_factura, fecha_operacion, cliente_id, cliente_nombre, cliente_documento, cliente_email, cliente_telefono, moto_placa, moto_modelo, metodo_pago, sede_id, sede_nombre, item_nombre, sku, item_precio, cantidad, duracion, unidad, fecha_garantia, cita_id, garantia_id, codigo_garantia')
+        .not('fecha_garantia', 'is', null)
+        .order('fecha_garantia', { ascending: false })
+        .limit(100);
+
+      if (scopeBranchId) {
+        inventoryQuery = inventoryQuery.eq('sede_id', scopeBranchId);
+        appointmentsQuery = appointmentsQuery.eq('sede_id', scopeBranchId);
+        attendanceQuery = attendanceQuery.eq('sede_id', scopeBranchId);
+        employeesQuery = employeesQuery.eq('sede_id', scopeBranchId);
+        invoicesQuery = invoicesQuery.eq('sede_id', scopeBranchId);
+        warrantiesQuery = warrantiesQuery.eq('sede_id', scopeBranchId);
+      } else if (effectiveRole === 'mecanico' && currentEmployeeResult.data?.id) {
+        appointmentsQuery = appointmentsQuery.eq('empleado_id', currentEmployeeResult.data.id);
+        attendanceQuery = attendanceQuery.eq('empleado_id', currentEmployeeResult.data.id);
+        employeesQuery = employeesQuery.eq('id', currentEmployeeResult.data.id);
+        inventoryQuery = Promise.resolve({ data: [], error: null });
+        invoicesQuery = Promise.resolve({ data: [], error: null });
+        warrantiesQuery = Promise.resolve({ data: [], error: null });
+      } else if (effectiveRole === 'cliente') {
+        inventoryQuery = Promise.resolve({ data: [], error: null });
+        attendanceQuery = Promise.resolve({ data: [], error: null });
+        employeesQuery = Promise.resolve({ data: [], error: null });
+      } else if ((effectiveRole === 'empleado' || effectiveRole === 'vendedor') && !assignedBranchId) {
+        inventoryQuery = Promise.resolve({ data: [], error: null });
+        appointmentsQuery = Promise.resolve({ data: [], error: null });
+        attendanceQuery = Promise.resolve({ data: [], error: null });
+        employeesQuery = Promise.resolve({ data: [], error: null });
+        invoicesQuery = Promise.resolve({ data: [], error: null });
+        warrantiesQuery = Promise.resolve({ data: [], error: null });
+      }
+
+      const [customersResult, productsResult, appointmentsResult, servicesResult, attendanceResult, employeesResult, invoicesResult, warrantiesResult, brandsResult, categoriesResult, attributesResult] = await Promise.all([
         supabase.from('usuarios').select('id, nombre, apellido, email, telefono, documento, activo, created_at, motos_clientes(*)').eq('rol', 'cliente').order('created_at', { ascending: false }).limit(100),
-        supabase.from('productos').select('id, nombre, descripcion, imagen_url, sku_base, precio, activo, sede_id, garantia_duracion, garantia_unidad, sede:sedes!productos_sede_id_fkey(id, nombre), marcas(nombre), tipos_producto(nombre), variantes_producto(id, sku, precio_adicional, inventario_sede(stock, stock_minimo, sedes(nombre)))').order('nombre'),
-        // `costo` is introduced by the companion SQL patch. Keeping it in a
-        // separate request lets existing databases continue loading products
-        // until that patch is applied.
-        supabase.from('productos').select('id, costo'),
-        supabase.from('citas').select('id, cliente_id, empleado_id, servicio_id, sede_id, moto_id, fecha_hora, estado, estado_version, notas, usuarios!citas_cliente_id_fkey(nombre, apellido, telefono, documento), servicios(nombre, precio, duracion_estimada_min), sedes(nombre), motos_clientes(marca, modelo, placa), empleados(nombre, apellido, usuarios(nombre, apellido))').order('fecha_hora', { ascending: false }),
-        // Load every branch so an existing product assigned to an inactive
-        // branch still shows its name. Only active branches become options for
-        // new products and transfers below.
-        supabase.from('sedes').select('id, nombre, activo').order('nombre'),
-        // Explicit columns keep the client independent of future additions to
-        // the table and make the mapping from `tipo` deterministic.
+        inventoryQuery,
+        appointmentsQuery,
         supabase.from('servicios').select('id, nombre, descripcion, tipo, duracion_estimada_min, precio, activo, garantia_duracion, garantia_unidad').order('nombre'),
-        supabase.from('asistencia_empleados').select('id, fecha, hora_entrada, hora_salida, empleados(id, nombre, apellido, cargo, usuarios(nombre, apellido), sedes(nombre))').order('fecha', { ascending: false }),
-        supabase.from('empleados').select('id, usuario_id, nombre, apellido, email, telefono, documento, cargo, sede_id, fecha_contratacion, activo, usuarios(nombre, apellido, email, telefono, documento), sedes(id, nombre)').order('nombre'),
-        supabase.from('facturas').select('id, numero_factura, cliente_id, sede_id, fecha, fecha_vencimiento, subtotal, impuestos, total, descuento_total, metodo_pago, estado, notas, cliente_nombre, cliente_documento, cliente_email, cliente_telefono, cliente_direccion, moto_placa, moto_modelo, empleado_nombre, sedes(nombre), factura_items(id, variante_id, nombre_producto, cantidad, precio_unitario, subtotal, sku, descuento_porcentaje), factura_servicios(id, servicio_id, nombre_servicio, cantidad, precio_unitario, subtotal, descuento_porcentaje)').order('fecha', { ascending: false }),
-        supabase.from('garantias').select('id, codigo, factura_id, cliente_id, tipo, item_nombre, sku, item_precio, cantidad, duracion, unidad, fecha_inicio, fecha_fin, utilizada_at, notas, facturas(numero_factura, metodo_pago, cliente_nombre, cliente_documento, cliente_email, cliente_telefono, moto_placa, moto_modelo, sedes(nombre)), usuarios(nombre, apellido, email, telefono, documento), productos(marcas(nombre)), servicios(nombre), reclamaciones_garantia(id, codigo, motivo, descripcion, estado, resolucion, costo_cubierto, created_at, empleados(nombre, apellido))').order('fecha_fin', { ascending: false }),
-        user ? supabase.from('usuarios').select('rol, activo').eq('id', user.id).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        attendanceQuery,
+        employeesQuery,
+        invoicesQuery,
+        warrantiesQuery,
         supabase.from('marcas').select('id, nombre').order('nombre'),
         supabase.from('tipos_producto').select('id, nombre').order('nombre'),
+        supabase.from('atributos').select('id, nombre, valores_atributo(id, valor)').order('nombre'),
       ]);
       if (!active) return;
       [
         ['clientes', customersResult.error], ['inventario', productsResult.error], ['citas', appointmentsResult.error],
         ['sedes', branchesResult.error], ['servicios', servicesResult.error], ['asistencia', attendanceResult.error],
         ['empleados', employeesResult.error], ['facturas', invoicesResult.error], ['garantías', warrantiesResult.error],
-        ['perfil', profileResult.error], ['marcas', brandsResult.error], ['categorías', categoriesResult.error],
+        ['perfil', profileResult.error], ['empleado actual', currentEmployeeResult.error], ['marcas', brandsResult.error], ['categorías', categoriesResult.error],
+        ['atributos', attributesResult.error],
       ].forEach(([module, error]) => { if (error) console.error(`No fue posible cargar ${module} desde Supabase`, error); });
-      if (profileResult.data?.rol && profileResult.data.activo !== false) setCurrentUserRole(profileResult.data.rol as AppUserRole);
       if (brandsResult.data) setProductBrands(brandsResult.data.map((brand) => ({ id: brand.id, name: brand.nombre })));
       if (categoriesResult.data) setProductCategories(categoriesResult.data.map((category) => ({ id: category.id, name: category.nombre })));
-      if (branchesResult.data) {
-        const locations = branchesResult.data
-          .filter((branch) => branch.activo !== false)
-          .map((branch) => ({ id: branch.id, name: branch.nombre }));
-        setBranchOptions(locations);
-        setBranches(locations.map((branch) => branch.name));
-      }
-      const activeBranches = branchesResult.data?.filter((branch) => branch.activo !== false) || [];
-      if (activeBranches.length && !activeBranches.some((branch) => branch.nombre === selectedBranch)) {
-        setSelectedBranch(activeBranches[0].nombre);
-      }
+      if (attributesResult.data) setProductAttributes(attributesResult.data.map((attribute) => ({
+        id: attribute.id,
+        name: attribute.nombre,
+        values: (attribute.valores_atributo || []).map((value) => ({ id: value.id, name: value.valor })),
+      })));
       if (customersResult.data) setCustomers(customersResult.data.map((customer: any) => ({
         id: customer.id, name: [customer.nombre, customer.apellido].filter(Boolean).join(' '), firstName: customer.nombre, lastName: customer.apellido || '', cedula: customer.documento || undefined, email: customer.email || '', phone: customer.telefono || '', isActive: customer.activo !== false,
         address: '', city: '', isVIP: false, registrationDate: new Date(customer.created_at).toLocaleDateString('es-CO'), notes: '', totalSpent: 0, completedServicesCount: 0,
@@ -313,47 +433,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           licensePlate: motorcycle.placa || '', vin: motorcycle.vin || '', mileage: motorcycle.kilometraje || 0, color: motorcycle.color || '', cylinderCapacity: motorcycle.cilindraje || '', isActive: motorcycle.activo !== false,
         })),
       })));
-      if (productsResult.data) setProducts(productsResult.data.flatMap((product: any) => {
-        const productCost = (productCostsResult.data as Array<{ id: string; costo: number }> | null)?.find((item) => item.id === product.id)?.costo;
-        const branchFromId = branchesResult.data?.find((branch) => branch.id === product.sede_id)?.nombre;
-        const variants = product.variantes_producto?.length
-          ? product.variantes_producto
-          : [{ id: product.id, sku: product.sku_base, precio_adicional: 0, inventario_sede: [] }];
-        return variants.flatMap((variant: any) => {
-        // A variant without stock is still shown as zero. Hiding it made a
-        // populated catalogue look empty whenever inventario_sede was pending.
-        const balances = variant.inventario_sede?.length ? variant.inventario_sede : [null];
-        return balances.map((inventory: any) => {
-          const stock = inventory?.stock || 0;
-          const minStock = inventory?.stock_minimo || 0;
-          // productos.sede_id is the canonical location. Resolve its display
-          // name from the separately loaded branch catalogue first, then use
-          // embedded relations only as fallbacks.
-          const branchName = branchFromId
-            || product.sede?.nombre
-            || inventory?.sedes?.nombre
-            || UNKNOWN_BRANCH;
-          return {
-            id: variant.id, productId: product.id, sku: variant.sku || product.sku_base || '', name: product.nombre,
-            description: product.descripcion || '', imageUrl: product.imagen_url || '', brand: product.marcas?.nombre || '', category: product.tipos_producto?.nombre || toProductCategory(),
-            branchId: product.sede_id, branch: branchName, isActive: product.activo !== false,
-            currentStock: stock, minStock, maxStock: Math.max(stock, minStock * 2, 1), costPrice: Number(productCost || 0),
-            salePrice: Number(product.precio) + Number(variant.precio_adicional), location: branchName, lastRestocked: '',
-            warrantyDuration: product.garantia_duracion || undefined, warrantyUnit: product.garantia_unidad || undefined,
-          };
-        });
-        });
+      if (productsResult.data) setProducts(productsResult.data.map((inventory) => {
+        const branchName = inventory.sede_nombre || UNKNOWN_BRANCH;
+        const stock = Number(inventory.stock || 0);
+        const minStock = Number(inventory.stock_minimo || 0);
+        const productAttributeValues = Array.isArray(inventory.atributos)
+          ? inventory.atributos.flatMap((entry) => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+            const attribute = typeof entry.atributo === 'string' ? entry.atributo : '';
+            const value = typeof entry.valor === 'string' ? entry.valor : '';
+            return attribute && value ? [{ attribute, value }] : [];
+          })
+          : [];
+        return {
+          id: inventory.inventario_id, inventoryId: inventory.inventario_id, variantId: inventory.variante_id, productId: inventory.producto_id,
+          sku: inventory.variante_sku || inventory.sku_base || '', name: inventory.producto_nombre,
+          description: inventory.producto_descripcion || '', imageUrl: inventory.imagen_url || '', brand: inventory.marca_nombre || '', category: inventory.categoria_nombre || toProductCategory(),
+          branchId: inventory.sede_id, branch: branchName, isActive: inventory.producto_activo !== false && inventory.variante_activa !== false,
+          currentStock: stock, minStock, maxStock: Math.max(stock, minStock * 2, 1), costPrice: Number(inventory.costo || 0),
+          salePrice: Number(inventory.precio) + Number(inventory.precio_adicional), location: branchName, lastRestocked: '',
+          warrantyDuration: inventory.garantia_duracion || undefined,
+          warrantyUnit: (inventory.garantia_unidad as ProductItem['warrantyUnit']) || undefined,
+          productType: productAttributeValues.length > 0 ? 'variable' : 'simple',
+          variantLabel: productAttributeValues.map((entry) => `${entry.attribute}: ${entry.value}`).join(' · ') || undefined,
+          attributes: productAttributeValues,
+        };
       }));
       if (appointmentsResult.data) setAppointments(appointmentsResult.data.map((appointment: any) => ({
         id: appointment.id, code: `CIT-${appointment.id.slice(0, 8).toUpperCase()}`, customerId: appointment.cliente_id,
-        customerName: [appointment.usuarios?.nombre, appointment.usuarios?.apellido].filter(Boolean).join(' ') || 'Cliente', customerPhone: appointment.usuarios?.telefono || '',
+        customerName: [appointment.usuarios?.nombre, appointment.usuarios?.apellido].filter(Boolean).join(' ') || 'Cliente', customerPhone: appointment.usuarios?.telefono || '', customerEmail: appointment.usuarios?.email || '',
         customerDocument: appointment.usuarios?.documento || undefined,
-        motorcycleId: appointment.moto_id || undefined, motorcyclePlate: appointment.motos_clientes?.placa || '', motorcycleModel: [appointment.motos_clientes?.marca, appointment.motos_clientes?.modelo].filter(Boolean).join(' '),
+        motorcycleId: appointment.moto_id || undefined, motorcyclePlate: appointment.motos_clientes?.placa || '', motorcycleModel: [appointment.motos_clientes?.marca, appointment.motos_clientes?.modelo].filter(Boolean).join(' '), motorcycleBrand: appointment.motos_clientes?.marca || '', motorcycleYear: appointment.motos_clientes?.anio || undefined,
         serviceId: appointment.servicio_id, serviceName: appointment.servicios?.nombre || 'Servicio', technicianId: appointment.empleado_id || undefined, technicianName: [appointment.empleados?.nombre || appointment.empleados?.usuarios?.nombre, appointment.empleados?.apellido || appointment.empleados?.usuarios?.apellido].filter(Boolean).join(' '),
         branchId: appointment.sede_id,
         branch: appointment.sedes?.nombre || '', date: new Date(appointment.fecha_hora).toLocaleDateString('es-CO'),
         time: new Date(appointment.fecha_hora).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
-        status: toAppointmentStatus(appointment.estado), estimatedDurationMin: appointment.servicios?.duracion_estimada_min || 0, notes: appointment.notas || undefined,
+        status: toAppointmentStatus(appointment.estado), stateVersion: Number(appointment.estado_version || 0), estimatedDurationMin: appointment.servicios?.duracion_estimada_min || 0, notes: appointment.notas || undefined,
         price: Number(appointment.servicios?.precio || 0), scheduledAt: appointment.fecha_hora,
       })));
       if (servicesResult.data) setServices(servicesResult.data.map((service: any) => ({
@@ -388,7 +503,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           unitPrice: Number(item.precio_unitario), discountPercent: Number(item.descuento_porcentaje || 0), total: Number(item.subtotal),
         }));
         const serviceItems = (invoice.factura_servicios || []).map((item: any) => ({
-          id: item.id, referenceId: item.servicio_id || undefined, description: item.nombre_servicio,
+          id: item.id, referenceId: item.servicio_id || undefined, appointmentId: item.cita_id || undefined, description: item.nombre_servicio,
           type: 'service' as const, quantity: item.cantidad, unitPrice: Number(item.precio_unitario),
           discountPercent: Number(item.descuento_porcentaje || 0), total: Number(item.subtotal),
         }));
@@ -401,7 +516,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           customerEmail: invoice.cliente_email || '', customerPhone: invoice.cliente_telefono || '',
           customerAddress: invoice.cliente_direccion || '', motorcyclePlate: invoice.moto_placa || undefined,
           motorcycleModel: invoice.moto_modelo || undefined, branch: invoice.sedes?.nombre || UNKNOWN_BRANCH,
-          issueDate, dueDate, employeeName: invoice.empleado_nombre || 'Equipo MotoPro',
+          issueDate, issuedAt: invoice.fecha, dueDate, employeeName: invoice.empleado_nombre || 'Equipo MotoPro',
           items: [...productItems, ...serviceItems], subtotal,
           taxRate: subtotal > 0 ? Number(((Number(invoice.impuestos || 0) / subtotal) * 100).toFixed(2)) : 0,
           taxAmount: Number(invoice.impuestos || 0), discountTotal: Number(invoice.descuento_total || 0),
@@ -410,44 +525,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         };
       }));
       if (warrantiesResult.data) setWarranties(warrantiesResult.data.map((warranty: any) => {
-        const start = new Date(`${warranty.fecha_inicio}T00:00:00`);
-        const end = new Date(`${warranty.fecha_fin}T23:59:59`);
+        const start = new Date(`${warranty.fecha_operacion}T00:00:00`);
+        const end = new Date(`${warranty.fecha_garantia}T23:59:59`);
         const daysRemaining = Math.max(0, Math.ceil((end.getTime() - Date.now()) / 86_400_000));
-        const hasOpenClaim = (warranty.reclamaciones_garantia || []).some((claim: any) => !['finalizada', 'rechazada'].includes(claim.estado));
-        const status: WarrantyRecord['status'] = hasOpenClaim || warranty.utilizada_at
-          ? 'En Reclamación'
-          : end.getTime() < Date.now()
-            ? 'Vencida'
-            : daysRemaining <= 30 ? 'Por Vencer' : 'Activa';
-        const invoice = warranty.facturas || {};
-        const customer = warranty.usuarios || {};
+        const status: WarrantyRecord['status'] = end.getTime() < Date.now()
+          ? 'Vencida'
+          : daysRemaining <= 30 ? 'Por Vencer' : 'Activa';
         return {
-          id: warranty.id, code: warranty.codigo, type: warranty.tipo, itemName: warranty.item_nombre,
+          id: warranty.id, code: warranty.codigo_garantia || `${warranty.numero_factura}-${warranty.tipo === 'service' ? 'SER' : 'PRO'}`,
+          type: warranty.tipo, itemName: warranty.item_nombre,
           category: warranty.tipo === 'service' ? 'Servicio Mecánico' : 'Repuesto / Producto', sku: warranty.sku || undefined,
-          brand: warranty.productos?.marcas?.nombre || undefined, invoiceId: warranty.factura_id,
-          invoiceNumber: invoice.numero_factura || '', itemPrice: Number(warranty.item_precio || 0), quantity: warranty.cantidad,
-          paymentMethod: invoice.metodo_pago || '', customerId: warranty.cliente_id,
-          customerName: invoice.cliente_nombre || [customer.nombre, customer.apellido].filter(Boolean).join(' '),
-          customerCedula: invoice.cliente_documento || customer.documento || '', customerPhone: invoice.cliente_telefono || customer.telefono || '',
-          customerEmail: invoice.cliente_email || customer.email || '', motorcyclePlate: invoice.moto_placa || '',
-          motorcycleModel: invoice.moto_modelo || '', branch: invoice.sedes?.nombre || UNKNOWN_BRANCH,
+          invoiceId: warranty.factura_id, invoiceNumber: warranty.numero_factura || '',
+          itemPrice: Number(warranty.item_precio || 0), quantity: warranty.cantidad,
+          paymentMethod: warranty.metodo_pago || '', customerId: warranty.cliente_id,
+          customerName: warranty.cliente_nombre || 'Cliente', customerCedula: warranty.cliente_documento || '',
+          customerPhone: warranty.cliente_telefono || '', customerEmail: warranty.cliente_email || '',
+          motorcyclePlate: warranty.moto_placa || '', motorcycleModel: warranty.moto_modelo || '',
+          branchId: warranty.sede_id, branch: warranty.sede_nombre || UNKNOWN_BRANCH,
+          appointmentId: warranty.cita_id || undefined,
           purchaseDate: start.toLocaleDateString('es-CO'),
           warrantyMonths: warranty.unidad === 'meses' ? warranty.duracion : warranty.unidad === 'anios' ? warranty.duracion * 12 : Math.ceil(warranty.duracion / 30),
-          expirationDate: end.toLocaleDateString('es-CO'), coverageDetails: warranty.notas || 'Cobertura según condiciones de la factura.',
+          expirationDate: end.toLocaleDateString('es-CO'),
+          coverageDetails: warranty.tipo === 'service' ? 'Seguimiento calculado desde la cita completada.' : 'Cobertura calculada desde la compra facturada.',
           status, daysRemaining,
-          claims: (warranty.reclamaciones_garantia || []).map((claim: any) => ({
-            id: claim.id, claimCode: claim.codigo, date: new Date(claim.created_at).toLocaleDateString('es-CO'),
-            reason: claim.motivo, description: claim.descripcion,
-            mechanicAssigned: [claim.empleados?.nombre, claim.empleados?.apellido].filter(Boolean).join(' ') || undefined,
-            status: ({ en_revision: 'En Revisión', aprobada: 'Aprobada', en_reparacion: 'En Reparación', finalizada: 'Finalizada', rechazada: 'Rechazada' }[claim.estado] || 'En Revisión') as WarrantyClaim['status'],
-            resolution: claim.resolucion || undefined, costCovered: Number(claim.costo_cubierto || 0),
-          })),
+          claims: [],
         };
       }));
     };
     void loadRemoteData();
     return () => { active = false; };
-  }, []);
+  }, [selectedBranch, dataRefreshVersion]);
 
   useEffect(() => {
     if (!selectedCustomer || !customers.some((customer) => customer.id === selectedCustomer.id)) {
@@ -472,6 +579,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [appointments]);
 
   useEffect(() => {
+    if (isSupabaseConfigured) return;
     localStorage.setItem('motopro_attendance', JSON.stringify(attendance));
   }, [attendance]);
 
@@ -506,6 +614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     view: ViewMode,
     meta?: { customerId?: string; appointmentId?: string; invoiceId?: string; actaId?: string; warrantyId?: string }
   ) => {
+    if (view === 'new-invoice' && !meta?.appointmentId) setSelectedAppointment(null);
     if (meta?.customerId) {
       const found = customers.find((c) => c.id === meta.customerId);
       if (found) setSelectedCustomer(found);
@@ -550,21 +659,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActivityLogs((prev) => [newLog, ...prev.slice(0, 20)]);
   };
 
-  const recordAttendance = (type: 'checkIn' | 'checkOut', employeeName = 'Carlos Mendoza (Jefe Taller)') => {
+  const recordAttendance = async (type: 'checkIn' | 'checkOut', employeeName?: string): Promise<boolean> => {
     const now = new Date();
     const timeStr = now.toTimeString().split(' ')[0];
     const dateStr = `Hoy, ${now.toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}`;
 
+    if (supabase) {
+      const normalizedName = employeeName?.replace(/\s*\([^)]*\)\s*$/, '').trim().toLocaleLowerCase('es');
+      const requestedEmployee = normalizedName
+        ? employees.find((employee) => `${employee.name} ${employee.lastName}`.trim().toLocaleLowerCase('es') === normalizedName)
+        : undefined;
+      if (normalizedName && !requestedEmployee) {
+        showToast('No se encontró el empleado seleccionado.', 'error');
+        return false;
+      }
+
+      const { data, error } = await supabase.rpc('registrar_asistencia', {
+        p_tipo: type,
+        p_empleado_id: requestedEmployee?.id || null,
+      });
+      const persisted = data?.[0];
+      if (error || !persisted) {
+        console.error('No fue posible registrar asistencia en Supabase', error);
+        showToast(`No se pudo registrar la asistencia: ${error?.message || 'respuesta vacía'}`, 'error');
+        return false;
+      }
+
+      const employee = employees.find((item) => item.id === persisted.empleado_id) || requestedEmployee;
+      const checkIn = new Date(persisted.hora_entrada);
+      const checkOut = persisted.hora_salida ? new Date(persisted.hora_salida) : null;
+      const workedHours = checkOut
+        ? Number(((checkOut.getTime() - checkIn.getTime()) / 3_600_000).toFixed(2))
+        : undefined;
+      const savedRecord: AttendanceRecord = {
+        id: persisted.id,
+        employeeId: persisted.empleado_id,
+        employeeName: employee ? `${employee.name} ${employee.lastName}`.trim() : 'Empleado',
+        employeeRole: employee?.role || 'Empleado',
+        branch: employee?.branch || branchOptions.find((branch) => branch.id === persisted.sede_id)?.name || selectedBranch,
+        date: persisted.fecha,
+        checkIn: checkIn.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+        checkOut: checkOut?.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+        status: checkOut ? 'Fuera' : 'En Turno',
+        totalHoursWorked: workedHours,
+        shift: 'Completo (09:00 - 18:00)',
+      };
+      setAttendance((current) => [savedRecord, ...current.filter((record) => record.id !== savedRecord.id)]);
+      logActivity(
+        type === 'checkIn' ? 'Entrada Registrada' : 'Salida Registrada',
+        `${savedRecord.employeeName} registró ${type === 'checkIn' ? 'entrada' : 'salida'} a las ${type === 'checkIn' ? savedRecord.checkIn : savedRecord.checkOut}`,
+        'attendance',
+        savedRecord.employeeName,
+      );
+      showToast(type === 'checkIn'
+        ? `¡Entrada registrada correctamente a las ${savedRecord.checkIn}!`
+        : `Salida registrada con éxito a las ${savedRecord.checkOut}.`, 'success');
+      return true;
+    }
+
     if (type === 'checkIn') {
-      const existing = attendance.find((a) => a.employeeName.includes('Carlos') && a.date.includes('Hoy'));
+      const displayName = employeeName || 'Empleado local';
+      const existing = attendance.find((record) => record.employeeName === displayName && record.date.includes('Hoy'));
       if (existing && existing.status === 'En Turno') {
         showToast('Ya tienes una entrada registrada para el turno actual', 'info');
-        return;
+        return false;
       }
       const newRec: AttendanceRecord = {
         id: 'ATT-' + Date.now(),
         employeeId: 'EMP-01',
-        employeeName,
+        employeeName: displayName,
         employeeRole: 'Mecánico Jefe',
         avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
         branch: selectedBranch,
@@ -574,12 +737,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         shift: 'Mañana (08:00 - 16:00)',
       };
       setAttendance((prev) => [newRec, ...prev]);
-      logActivity('Entrada Registrada', `${employeeName} registró entrada a las ${timeStr}`, 'attendance', employeeName);
+      logActivity('Entrada Registrada', `${displayName} registró entrada a las ${timeStr}`, 'attendance', displayName);
       showToast(`¡Entrada registrada correctamente a las ${timeStr}!`, 'success');
     } else {
+      const displayName = employeeName || 'Empleado local';
       setAttendance((prev) =>
         prev.map((rec) => {
-          if (rec.employeeName.includes('Carlos') && (!rec.checkOut || rec.checkOut === '—')) {
+          if (rec.employeeName === displayName && (!rec.checkOut || rec.checkOut === '—')) {
             return {
               ...rec,
               checkOut: timeStr,
@@ -590,38 +754,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return rec;
         })
       );
-      logActivity('Salida Registrada', `${employeeName} registró salida a las ${timeStr}`, 'attendance', employeeName);
+      logActivity('Salida Registrada', `${displayName} registró salida a las ${timeStr}`, 'attendance', displayName);
       showToast(`Salida registrada con éxito a las ${timeStr}. ¡Buen descanso!`, 'success');
     }
+    return true;
   };
 
   const updateAppointmentStatus = async (id: string, status: Appointment['status']) => {
     const currentAppointment = appointments.find((appointment) => appointment.id === id);
+    let confirmedStateVersion = currentAppointment?.stateVersion;
     if (currentAppointment?.status === status) {
       showToast('La cita ya se encuentra en ese estado.', 'info');
       return;
     }
     if (supabase) {
-      if (currentUserRole !== 'admin' && currentUserRole !== 'empleado') {
-        showToast('Solo administración y empleados pueden actualizar una cita.', 'error');
+      if (!['admin', 'empleado', 'vendedor', 'mecanico'].includes(currentUserRole || '')) {
+        showToast('Tu perfil no puede actualizar citas.', 'error');
         return;
       }
-      const { error } = await supabase
-        .from('citas')
-        .update({ estado: toDatabaseAppointmentStatus(status) })
-        .eq('id', id)
-        .select('id')
-        .single();
-      if (error) {
+      const { data, error } = await supabase.rpc('cambiar_estado_cita', {
+        p_cita_id: id,
+        p_estado: toDatabaseAppointmentStatus(status),
+        p_estado_version: currentAppointment?.stateVersion || 0,
+      });
+      if (error || !data?.[0]) {
         console.error('No fue posible actualizar la cita en Supabase', error);
-        showToast(`No se pudo actualizar la cita: ${error.message}`, 'error');
+        if (error?.code === '40001') setDataRefreshVersion((version) => version + 1);
+        showToast(`No se pudo actualizar la cita: ${error?.message || 'respuesta vacía'}`, 'error');
         return;
       }
+      confirmedStateVersion = data[0].estado_version;
     }
     setAppointments((prev) =>
       prev.map((apt) => {
         if (apt.id === id) {
-          const updated = { ...apt, status };
+          const updated = {
+            ...apt,
+            status,
+            stateVersion: confirmedStateVersion ?? apt.stateVersion,
+          };
           logActivity(
             `Estado Cita: ${status}`,
             `Cita ${apt.code} (${apt.motorcycleModel}) cambió a ${status}`,
@@ -632,10 +803,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return apt;
       })
     );
+    setSelectedAppointment((current) => current?.id === id
+      ? { ...current, status, stateVersion: confirmedStateVersion ?? current.stateVersion }
+      : current);
     showToast(`Cita actualizada a estado: ${status}`, 'success');
   };
 
+  const updateAppointmentDetails = async (
+    id: string,
+    changes: { scheduledAt: string; technicianId: string; technicianName: string },
+  ): Promise<boolean> => {
+    if (!['admin', 'empleado', 'vendedor'].includes(currentUserRole || '')) {
+      showToast('Tu perfil no puede reagendar ni reasignar citas.', 'error');
+      return false;
+    }
+    const appointment = appointments.find((item) => item.id === id);
+    const technician = employees.find((item) => item.id === changes.technicianId && item.isActive);
+    if (!appointment || !technician || technician.branchId !== appointment.branchId) {
+      showToast('Selecciona un técnico activo de la misma sede.', 'error');
+      return false;
+    }
+
+    if (supabase) {
+      const { data, error } = await supabase.rpc('reagendar_cita', {
+        p_cita_id: id,
+        p_fecha_hora: changes.scheduledAt,
+        p_empleado_id: changes.technicianId,
+      });
+      if (error || !data?.[0]) {
+        console.error('No fue posible reagendar la cita en Supabase', error);
+        showToast(`No se pudo actualizar la cita: ${error?.message || 'respuesta vacía'}`, 'error');
+        return false;
+      }
+    }
+
+    const scheduledDate = new Date(changes.scheduledAt);
+    const updatedFields: Partial<Appointment> = {
+      scheduledAt: changes.scheduledAt,
+      date: scheduledDate.toLocaleDateString('es-CO'),
+      time: scheduledDate.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+      technicianId: changes.technicianId,
+      technicianName: changes.technicianName,
+    };
+    setAppointments((current) => current.map((item) => item.id === id ? { ...item, ...updatedFields } : item));
+    setSelectedAppointment((current) => current?.id === id ? { ...current, ...updatedFields } : current);
+    logActivity('Cita reagendada', `${appointment.code} fue actualizada para ${updatedFields.date} a las ${updatedFields.time}`, 'appointment');
+    showToast('Fecha, hora y técnico actualizados.', 'success');
+    return true;
+  };
+
   const createAppointment = async (aptData: Partial<Appointment>): Promise<boolean> => {
+    if (!['admin', 'empleado', 'vendedor'].includes(currentUserRole || '')) {
+      showToast('Solo administración y vendedores pueden agendar citas.', 'error');
+      return false;
+    }
     const code = `CIT-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`;
     if (!aptData.customerId || !aptData.serviceId || !aptData.motorcycleId || !aptData.technicianId) {
       showToast('Cliente, vehículo, servicio y técnico son obligatorios.', 'error');
@@ -673,11 +894,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       customerId: aptData.customerId || 'CUST-001',
       customerName: aptData.customerName || 'Cliente General',
       customerPhone: aptData.customerPhone || '+57 310 456 7890',
+      customerEmail: aptData.customerEmail,
       customerAvatar: aptData.customerAvatar,
       customerDocument: aptData.customerDocument,
       motorcycleId: aptData.motorcycleId,
       motorcyclePlate: aptData.motorcyclePlate || '',
       motorcycleModel: aptData.motorcycleModel || '',
+      motorcycleBrand: aptData.motorcycleBrand,
+      motorcycleYear: aptData.motorcycleYear,
       serviceId: aptData.serviceId || 'SERV-001',
       serviceName: aptData.serviceName || 'Revisión General',
       technicianId: aptData.technicianId,
@@ -698,89 +922,258 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const restockProduct = (id: string, amount: number) => {
-    setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id === id) {
-          const updated = { ...p, currentStock: Math.min(p.maxStock, p.currentStock + amount), lastRestocked: 'Hoy' };
-          logActivity(
-            'Stock Repuesto',
-            `Se añadieron +${amount} uds a ${p.name} (Nuevo stock: ${updated.currentStock})`,
-            'stock'
-          );
-          return updated;
-        }
-        return p;
-      })
-    );
-    if (supabase) {
-      void (async () => {
-        const { data: row } = await supabase.from('inventario_sede').select('id, stock, sede_id, variante_id').eq('variante_id', id).order('stock', { ascending: false }).limit(1).maybeSingle();
-        if (!row) return;
-        const { error } = await supabase.from('inventario_sede').update({ stock: row.stock + amount }).eq('id', row.id);
-        if (!error) await supabase.from('movimientos_inventario').insert({ variante_id: row.variante_id, sede_id: row.sede_id, tipo: 'entrada', cantidad: amount, motivo: 'Reposición desde plataforma' });
-        if (error) { console.error('No fue posible actualizar inventario en Supabase', error); showToast(`No se pudo actualizar inventario: ${error.message}`, 'error'); }
-      })();
+  const loadAppointmentsRange = useCallback(async (from: string, to: string): Promise<void> => {
+    if (!supabase || !currentUserRole) return;
+    const branch = branchOptions.find((item) => item.name === selectedBranch);
+    if (currentUserRole !== 'admin'
+        && currentUserRole !== 'mecanico'
+        && currentUserRole !== 'cliente'
+        && !branch) {
+      setAppointments([]);
+      return;
     }
+
+    let query = supabase
+      .from('citas')
+      .select('id, cliente_id, empleado_id, servicio_id, sede_id, moto_id, fecha_hora, estado, estado_version, notas, usuarios!citas_cliente_id_fkey(nombre, apellido, telefono, email, documento), servicios(nombre, precio, duracion_estimada_min), sedes(nombre), motos_clientes(marca, modelo, anio, placa), empleados(nombre, apellido, usuarios(nombre, apellido))')
+      .gte('fecha_hora', from)
+      .lt('fecha_hora', to)
+      .order('fecha_hora', { ascending: true })
+      .limit(500);
+    if (branch && (currentUserRole !== 'admin' || selectedBranch !== ALL_BRANCHES)) {
+      query = query.eq('sede_id', branch.id);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error('No fue posible cargar el rango de citas desde Supabase', error);
+      return;
+    }
+    setAppointments((data || []).map((appointment: any) => ({
+      id: appointment.id,
+      code: `CIT-${appointment.id.slice(0, 8).toUpperCase()}`,
+      customerId: appointment.cliente_id,
+      customerName: [appointment.usuarios?.nombre, appointment.usuarios?.apellido].filter(Boolean).join(' ') || 'Cliente',
+      customerPhone: appointment.usuarios?.telefono || '',
+      customerEmail: appointment.usuarios?.email || '',
+      customerDocument: appointment.usuarios?.documento || undefined,
+      motorcycleId: appointment.moto_id || undefined,
+      motorcyclePlate: appointment.motos_clientes?.placa || '',
+      motorcycleModel: [appointment.motos_clientes?.marca, appointment.motos_clientes?.modelo].filter(Boolean).join(' '),
+      motorcycleBrand: appointment.motos_clientes?.marca || '',
+      motorcycleYear: appointment.motos_clientes?.anio || undefined,
+      serviceId: appointment.servicio_id,
+      serviceName: appointment.servicios?.nombre || 'Servicio',
+      technicianId: appointment.empleado_id || undefined,
+      technicianName: [appointment.empleados?.nombre || appointment.empleados?.usuarios?.nombre, appointment.empleados?.apellido || appointment.empleados?.usuarios?.apellido].filter(Boolean).join(' '),
+      branchId: appointment.sede_id,
+      branch: appointment.sedes?.nombre || '',
+      date: new Date(appointment.fecha_hora).toLocaleDateString('es-CO'),
+      time: new Date(appointment.fecha_hora).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }),
+      status: toAppointmentStatus(appointment.estado),
+      stateVersion: Number(appointment.estado_version || 0),
+      estimatedDurationMin: appointment.servicios?.duracion_estimada_min || 0,
+      notes: appointment.notas || undefined,
+      price: Number(appointment.servicios?.precio || 0),
+      scheduledAt: appointment.fecha_hora,
+    })));
+  }, [branchOptions, currentUserRole, selectedBranch]);
+
+  const restockProduct = async (id: string, amount: number): Promise<boolean> => {
+    const selectedInventory = products.find((product) => product.id === id);
+    if (!selectedInventory || !Number.isInteger(amount) || amount <= 0) {
+      showToast('Selecciona un producto y una cantidad válida.', 'error');
+      return false;
+    }
+    if (!canManageInventory) {
+      showToast('Tu perfil no tiene permiso para reponer inventario.', 'error');
+      return false;
+    }
+
+    let confirmedStock = selectedInventory.currentStock + amount;
+    if (supabase) {
+      if (!selectedInventory.inventoryId || !selectedInventory.variantId || !selectedInventory.branchId) {
+        showToast('El producto no tiene un inventario de sede válido.', 'error');
+        return false;
+      }
+      const { error: movementError } = await supabase.from('movimientos_inventario').insert({
+        variante_id: selectedInventory.variantId,
+        sede_id: selectedInventory.branchId,
+        tipo: 'entrada',
+        cantidad: amount,
+        motivo: 'Reposición desde plataforma',
+      });
+      if (movementError) {
+        console.error('No fue posible actualizar inventario en Supabase', movementError);
+        showToast(`No se pudo actualizar inventario: ${movementError.message}`, 'error');
+        return false;
+      }
+      const { data: persisted, error: reloadError } = await supabase
+        .from('inventario_sede')
+        .select('stock')
+        .eq('id', selectedInventory.inventoryId)
+        .single();
+      if (reloadError || !persisted) {
+        console.error('El movimiento se guardó, pero no fue posible recargar el saldo', reloadError);
+        setDataRefreshVersion((version) => version + 1);
+        showToast('El movimiento se guardó; el saldo se recargará desde Supabase.', 'info');
+        return true;
+      }
+      confirmedStock = Number(persisted.stock);
+    }
+
+    setProducts((prev) => prev.map((product) => product.id === id
+      ? { ...product, currentStock: confirmedStock, maxStock: Math.max(product.maxStock, confirmedStock), lastRestocked: 'Hoy' }
+      : product));
+    logActivity('Stock Repuesto', `Se añadieron +${amount} uds a ${selectedInventory.name} (Nuevo stock: ${confirmedStock})`, 'stock');
     showToast(`Stock repuesto (+${amount} unidades) correctamente`, 'success');
+    return true;
   };
 
-  const createProduct = async (prodData: Omit<ProductItem, 'id'>): Promise<boolean> => {
+  const createProductCatalogOption = async (
+    catalog: 'brand' | 'category' | 'attribute' | 'attributeValue',
+    name: string,
+    attributeId?: string,
+  ): Promise<CatalogOption | null> => {
+    if (!canManageInventory) {
+      showToast('Solo administradores y empleados pueden administrar catálogos', 'error');
+      return null;
+    }
+
+    const normalizedName = name.trim();
+    if (!normalizedName) return null;
+
+    if (!supabase) {
+      const option = { id: `LOCAL-${Date.now()}`, name: normalizedName };
+      if (catalog === 'brand') setProductBrands((current) => [...current, option]);
+      if (catalog === 'category') setProductCategories((current) => [...current, option]);
+      if (catalog === 'attribute') setProductAttributes((current) => [...current, { ...option, values: [] }]);
+      if (catalog === 'attributeValue' && attributeId) {
+        setProductAttributes((current) => current.map((attribute) => attribute.id === attributeId
+          ? { ...attribute, values: [...attribute.values, option] }
+          : attribute));
+      }
+      return option;
+    }
+
+    const databaseCatalog = {
+      brand: 'marca',
+      category: 'categoria',
+      attribute: 'atributo',
+      attributeValue: 'valor_atributo',
+    } as const;
+    const { data, error } = await supabase.rpc('crear_opcion_catalogo_producto', {
+      p_catalogo: databaseCatalog[catalog],
+      p_nombre: normalizedName,
+      p_atributo_id: attributeId || null,
+    });
+    if (error || !data || typeof data !== 'object' || Array.isArray(data)) {
+      console.error('No fue posible crear la opción de catálogo', error);
+      showToast(`No se pudo crear la opción: ${error?.message || 'respuesta inválida'}`, 'error');
+      return null;
+    }
+
+    const id = typeof data.id === 'string' ? data.id : '';
+    if (!id) {
+      showToast('Supabase no devolvió el identificador del catálogo.', 'error');
+      return null;
+    }
+    const option = { id, name: normalizedName };
+    const appendUnique = (current: CatalogOption[]) => current.some((item) => item.id === option.id) ? current : [...current, option];
+    if (catalog === 'brand') setProductBrands(appendUnique);
+    if (catalog === 'category') setProductCategories(appendUnique);
+    if (catalog === 'attribute') {
+      setProductAttributes((current) => current.some((item) => item.id === option.id)
+        ? current
+        : [...current, { ...option, values: [] }]);
+    }
+    if (catalog === 'attributeValue' && attributeId) {
+      setProductAttributes((current) => current.map((attribute) => attribute.id === attributeId
+        ? { ...attribute, values: appendUnique(attribute.values) }
+        : attribute));
+    }
+    return option;
+  };
+
+  const createProduct = async (prodData: ProductCreationInput): Promise<boolean> => {
     if (!canManageInventory) {
       showToast('Solo administradores y empleados pueden añadir productos', 'error');
       return false;
     }
 
-    const branch = branchOptions.find((item) => item.name === prodData.branch);
-    const brand = productBrands.find((item) => item.name === prodData.brand);
-    const category = productCategories.find((item) => item.name === prodData.category);
-    if (!branch || !brand || !category) {
+    if (!branchOptions.some((branch) => branch.id === prodData.branchId)
+      || !productBrands.some((brand) => brand.id === prodData.brandId)
+      || !productCategories.some((category) => category.id === prodData.categoryId)) {
       showToast('Selecciona una sede, marca y categoría válidas', 'error');
       return false;
     }
 
     if (supabase) {
-      const { data, error } = await supabase.rpc('crear_producto_inventario', {
-        p_nombre: prodData.name.trim(),
-        p_descripcion: prodData.description?.trim() || null,
-        p_sku: prodData.sku.trim(),
-        p_marca_id: brand.id,
-        p_tipo_id: category.id,
-        p_sede_id: branch.id,
+      const { data, error } = await supabase.rpc('crear_producto_con_variantes', {
+        p_tipo_producto: prodData.kind,
+        p_nombre: prodData.name,
+        p_descripcion: prodData.description || null,
+        p_sku_base: prodData.baseSku,
+        p_marca_id: prodData.brandId,
+        p_tipo_id: prodData.categoryId,
+        p_sede_id: prodData.branchId,
         p_costo: prodData.costPrice,
-        p_precio: prodData.salePrice,
-        p_imagen_url: prodData.imageUrl?.trim() || null,
-        p_stock_inicial: prodData.currentStock,
-        p_stock_minimo: prodData.minStock,
-        p_activo: prodData.isActive !== false,
+        p_precio_base: prodData.salePrice,
+        p_imagen_url: prodData.imageUrl || null,
+        p_garantia_duracion: prodData.warrantyDuration || null,
+        p_garantia_unidad: prodData.warrantyUnit || null,
+        p_variantes: prodData.variants.map((variant) => ({
+          sku: variant.sku,
+          precio_adicional: variant.additionalPrice,
+          stock: variant.stock,
+          stock_minimo: variant.minStock,
+          activo: variant.isActive,
+          valor_ids: variant.valueIds,
+        })),
+        p_activo: prodData.isActive,
       });
       if (error || !data) {
         console.error('No fue posible crear producto en Supabase', error);
         showToast(`No se pudo guardar el producto: ${error?.message || 'error desconocido'}`, 'error');
         return false;
       }
-      const result = data as { producto_id: string; variante_id: string };
-      if (prodData.warrantyDuration && prodData.warrantyUnit) {
-        const { error: warrantyError } = await supabase.rpc('configurar_garantia_producto', {
-          p_producto_id: result.producto_id,
-          p_duracion: prodData.warrantyDuration,
-          p_unidad: prodData.warrantyUnit,
-        });
-        if (warrantyError) {
-          showToast('El producto se creó, pero no fue posible configurar su garantía.', 'warning');
-        }
-      }
-      const newProd: ProductItem = { ...prodData, id: result.variante_id, productId: result.producto_id, branchId: branch.id };
-      setProducts((prev) => [newProd, ...prev]);
+      setDataRefreshVersion((version) => version + 1);
     } else {
-      setProducts((prev) => [{ ...prodData, id: `PROD-${Date.now()}`, productId: `PROD-${Date.now()}`, branchId: branch.id }, ...prev]);
+      const productId = `PROD-${Date.now()}`;
+      const localItems = prodData.variants.map((variant, index): ProductItem => ({
+        id: `${productId}-${index}`,
+        productId,
+        variantId: `${productId}-${index}`,
+        inventoryId: `${productId}-${index}`,
+        sku: variant.sku,
+        name: prodData.name,
+        brand: prodData.brandName,
+        category: prodData.categoryName,
+        description: prodData.description,
+        imageUrl: prodData.imageUrl,
+        branchId: prodData.branchId,
+        branch: prodData.branchName,
+        isActive: prodData.isActive && variant.isActive,
+        currentStock: variant.stock,
+        minStock: variant.minStock,
+        maxStock: Math.max(variant.stock, variant.minStock * 2, 1),
+        costPrice: prodData.costPrice,
+        salePrice: prodData.salePrice + variant.additionalPrice,
+        location: prodData.branchName,
+        lastRestocked: 'Hoy',
+        warrantyDuration: prodData.warrantyDuration,
+        warrantyUnit: prodData.warrantyUnit,
+        productType: prodData.kind,
+        variantLabel: prodData.kind === 'variable' ? variant.label : undefined,
+      }));
+      setProducts((current) => [...localItems, ...current]);
     }
-    logActivity('Nuevo Producto', `Se agregó ${prodData.name} (${prodData.sku}) en ${prodData.branch}`, 'stock');
+    logActivity('Nuevo Producto', `Se agregó ${prodData.name} con ${prodData.variants.length} variante(s) en ${prodData.branchName}`, 'stock');
     showToast(`Producto ${prodData.name} agregado al inventario`, 'success');
     return true;
   };
 
-  const canManageInventory = currentUserRole === 'admin' || currentUserRole === 'empleado';
+  const canManageInventory = ['admin', 'empleado'].includes(currentUserRole || '');
 
   const moveProductToBranch = async (productId: string, branchName: string): Promise<boolean> => {
     if (!canManageInventory) {
@@ -788,7 +1181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
     const destination = branchOptions.find((branch) => branch.name === branchName);
-    const product = products.find((item) => (item.productId || item.id) === productId);
+    const product = products.find((item) => item.id === productId || (item.productId || item.id) === productId);
     if (!destination || !product) {
       showToast('No se encontró el producto o la sede de destino', 'error');
       return false;
@@ -796,8 +1189,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (product.branchId === destination.id) return true;
 
     if (supabase) {
-      const { error } = await supabase.rpc('mover_producto_sede', {
-        p_producto_id: productId,
+      const { error } = await supabase.rpc('trasladar_producto_entre_sedes', {
+        p_producto_id: product.productId || product.id,
+        p_sede_origen_id: product.branchId!,
         p_sede_destino_id: destination.id,
       });
       if (error) {
@@ -808,9 +1202,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const previousBranch = product.branch;
-    setProducts((prev) => prev.map((item) => (item.productId || item.id) === productId
-      ? { ...item, branchId: destination.id, branch: destination.name, location: destination.name }
-      : item));
+    setProducts((prev) => {
+      if (selectedBranch !== ALL_BRANCHES) {
+        return prev.filter((item) => !(
+          item.productId === product.productId && item.branchId === product.branchId
+        ));
+      }
+      const destinationBalance = prev.find((item) =>
+        item.id !== product.id
+        && item.variantId === product.variantId
+        && item.branchId === destination.id
+      );
+      if (!destinationBalance) {
+        return prev.map((item) => item.id === product.id
+          ? { ...item, branchId: destination.id, branch: destination.name, location: destination.name }
+          : item);
+      }
+      return prev
+        .filter((item) => item.id !== product.id)
+        .map((item) => item.id === destinationBalance.id
+          ? { ...item, currentStock: item.currentStock + product.currentStock, minStock: Math.max(item.minStock, product.minStock) }
+          : item);
+    });
     logActivity('Inventario trasladado', `${product.name}: ${previousBranch} → ${destination.name}`, 'stock');
     showToast(`${product.name} fue trasladado a ${destination.name}`, 'success');
     return true;
@@ -998,9 +1411,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         p_moto_modelo: invData.motorcycleModel || '',
         p_tasa_impuesto: invData.taxRate,
         p_items: invData.items.map((item) => ({
-          referenceId: item.referenceId || null, description: item.description, sku: item.sku || null,
-          type: item.type, quantity: item.quantity, unitPrice: item.unitPrice,
-          discountPercent: item.discountPercent, total: item.total,
+          referenceId: item.referenceId || null,
+          appointmentId: item.appointmentId || null,
+          type: item.type,
+          quantity: item.quantity,
+          discountPercent: item.discountPercent,
         })),
       });
       if (error || !data?.[0]) {
@@ -1015,6 +1430,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...invData,
       id: invoiceId,
       invoiceNumber,
+      issuedAt: invData.issuedAt || new Date().toISOString().slice(0, 10),
     };
     setInvoices((prev) => [newInvoice, ...prev]);
 
@@ -1024,6 +1440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'invoice'
     );
     showToast(`Factura ${invoiceNumber} emitida. Las garantías configuradas se registraron en Supabase.`, 'success');
+    if (supabase) setDataRefreshVersion((version) => version + 1);
     return newInvoice.id;
   };
 
@@ -1247,7 +1664,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectedBranch,
         setSelectedBranch,
         branches,
+        branchOptions,
         currentUserRole,
+        canSelectBranch,
+        isMechanic,
         canManageInventory,
         productBrands,
         productCategories,
@@ -1277,7 +1697,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeToast,
         recordAttendance,
         updateAppointmentStatus,
+        updateAppointmentDetails,
         createAppointment,
+        loadAppointmentsRange,
         restockProduct,
         createProduct,
         moveProductToBranch,

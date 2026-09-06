@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
@@ -7,25 +7,30 @@ import { ToastContainer } from './components/common/ToastContainer';
 
 // Views
 import { DashboardView } from './components/dashboard/DashboardView';
-import { InventoryView } from './components/inventory/InventoryView';
-import { MoveInventoryView } from './components/inventory/MoveInventoryView';
-import { AttendanceView } from './components/attendance/AttendanceView';
-import { EmployeesView } from './components/employees/EmployeesView';
-import { CustomersView } from './components/customers/CustomersView';
-import { VehiclesView } from './components/vehicles/VehiclesView';
-import { AppointmentsView } from './components/appointments/AppointmentsView';
-import { ServicesCatalogView } from './components/services/ServicesCatalogView';
-import { InvoicesView } from './components/invoices/InvoicesView';
-import { NewInvoiceView } from './components/invoices/NewInvoiceView';
-import { GarantiasView } from './components/garantias/GarantiasView';
-import { ActasView } from './components/actas/ActasView';
-import { AnalyticsView } from './components/analytics/AnalyticsView';
-import { SettingsView } from './components/settings/SettingsView';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
+const InventoryView = lazy(() => import('./components/inventory/InventoryView').then((module) => ({ default: module.InventoryView })));
+const MoveInventoryView = lazy(() => import('./components/inventory/MoveInventoryView').then((module) => ({ default: module.MoveInventoryView })));
+const AttendanceView = lazy(() => import('./components/attendance/AttendanceView').then((module) => ({ default: module.AttendanceView })));
+const EmployeesView = lazy(() => import('./components/employees/EmployeesView').then((module) => ({ default: module.EmployeesView })));
+const CustomersView = lazy(() => import('./components/customers/CustomersView').then((module) => ({ default: module.CustomersView })));
+const VehiclesView = lazy(() => import('./components/vehicles/VehiclesView').then((module) => ({ default: module.VehiclesView })));
+const AppointmentsView = lazy(() => import('./components/appointments/AppointmentsView').then((module) => ({ default: module.AppointmentsView })));
+const ServicesCatalogView = lazy(() => import('./components/services/ServicesCatalogView').then((module) => ({ default: module.ServicesCatalogView })));
+const InvoicesView = lazy(() => import('./components/invoices/InvoicesView').then((module) => ({ default: module.InvoicesView })));
+const NewInvoiceView = lazy(() => import('./components/invoices/NewInvoiceView').then((module) => ({ default: module.NewInvoiceView })));
+const GarantiasView = lazy(() => import('./components/garantias/GarantiasView').then((module) => ({ default: module.GarantiasView })));
+const ActasView = lazy(() => import('./components/actas/ActasView').then((module) => ({ default: module.ActasView })));
+const AnalyticsView = lazy(() => import('./components/analytics/AnalyticsView').then((module) => ({ default: module.AnalyticsView })));
+const SettingsView = lazy(() => import('./components/settings/SettingsView').then((module) => ({ default: module.SettingsView })));
+
 const MainContent: React.FC = () => {
-  const { currentView } = useApp();
+  const { currentView, currentUserRole } = useApp();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  if (isSupabaseConfigured && !currentUserRole) {
+    return <div className="grid min-h-screen place-items-center bg-slate-950 text-white">Verificando permisos…</div>;
+  }
 
   const renderView = () => {
     switch (currentView) {
@@ -76,7 +81,9 @@ const MainContent: React.FC = () => {
         {/* Scrollable View Container */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="max-w-7xl mx-auto pb-12">
-            {renderView()}
+            <Suspense fallback={<div className="grid min-h-64 place-items-center text-sm font-semibold text-slate-500">Cargando módulo…</div>}>
+              {renderView()}
+            </Suspense>
           </div>
         </main>
       </div>
